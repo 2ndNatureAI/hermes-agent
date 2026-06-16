@@ -187,8 +187,8 @@ export function McpSettings({ gateway, onConfigSaved }: McpSettingsProps) {
   return (
     <SettingsContent>
       <div className="mb-4 flex items-center justify-end gap-4">
-        <Button onClick={() => setSelected(null)} size="xs" variant="text">
-          {m.newServer}
+        <Button onClick={() => setSelected(null)} size="sm" variant="outline">
+          ＋ {m.newServer}
         </Button>
         <Button disabled={reloading} onClick={() => void reloadMcp()} size="xs" variant="text">
           {reloading ? m.reloading : m.reload}
@@ -242,6 +242,7 @@ export function McpSettings({ gateway, onConfigSaved }: McpSettingsProps) {
             <Textarea
               className="min-h-80 font-mono text-xs"
               onChange={event => setBody(event.currentTarget.value)}
+              placeholder={selected ? '' : '{\n  "command": "npx",\n  "args": ["-y", "@org/mcp-server"]\n}'}
               spellCheck={false}
               value={body}
             />
@@ -260,8 +261,8 @@ export function McpSettings({ gateway, onConfigSaved }: McpSettingsProps) {
             ) : (
               <span />
             )}
-            <Button disabled={saving} onClick={() => void saveServer()} size="sm">
-              {saving ? t.common.saving : m.saveServer}
+            <Button disabled={saving} onClick={() => void saveServer()} size="sm" variant={selected ? 'default' : 'secondary'}>
+              {saving ? t.common.saving : selected ? m.saveServer : m.addServer}
             </Button>
           </div>
         </div>

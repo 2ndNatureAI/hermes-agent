@@ -520,6 +520,7 @@ export const en: Translations = {
       savedTitle: 'MCP server saved',
       savedMessage: name => `${name} applies after MCP reload.`,
       newServer: 'New server',
+      addServer: 'Add server',
       reload: 'Reload MCP',
       reloading: 'Reloading...',
       emptyTitle: 'No MCP servers',

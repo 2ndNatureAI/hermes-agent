@@ -413,6 +413,7 @@ export interface Translations {
       savedTitle: string
       savedMessage: (name: string) => string
       newServer: string
+      addServer?: string
       reload: string
       reloading: string
       emptyTitle: string
