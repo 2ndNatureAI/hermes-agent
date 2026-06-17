@@ -29,6 +29,7 @@ Usage::
 
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -107,6 +108,19 @@ MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB
 OPENAI_MODELS = {"whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe"}
 GROQ_MODELS = {"whisper-large-v3", "whisper-large-v3-turbo", "distil-whisper-large-v3-en"}
 
+STT_SANITY_HIGH_RISK_PATTERNS = (
+    r"\bshot\b",
+    r"\bgun\b",
+    r"\bbleeding\b",
+    r"\bblood\b",
+    r"\b911\b",
+    r"\bkill(?:ed|ing)?\b",
+    r"\bsuicide\b",
+    r"\boverdose\b",
+    r"\bheart attack\b",
+    r"\bstroke\b",
+)
+
 # Singleton for the local model — loaded once, reused across calls
 _local_model: Optional[object] = None
 _local_model_name: Optional[str] = None
@@ -132,6 +146,111 @@ def is_stt_enabled(stt_config: Optional[dict] = None) -> bool:
         stt_config = _load_stt_config()
     enabled = stt_config.get("enabled", True)
     return is_truthy_value(enabled, default=True)
+
+
+def _stt_sanity_guard_enabled(stt_config: Optional[dict] = None) -> bool:
+    """Return whether suspicious STT transcripts should be blocked.
+
+    The guard always annotates successful transcription results with
+    ``stt_sanity`` metadata. Blocking is opt-in via ``stt.sanity_guard`` so
+    normal users can inspect the signal without a surprise behavior change.
+    """
+    if stt_config is None:
+        stt_config = _load_stt_config()
+    guard_config = stt_config.get("sanity_guard", {})
+    if isinstance(guard_config, dict):
+        return is_truthy_value(guard_config.get("enabled", False), default=False)
+    return is_truthy_value(guard_config, default=False)
+
+
+def _normalize_transcript_for_sanity(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def _repeated_sentence_count(text: str) -> int:
+    chunks = [chunk.strip().lower() for chunk in re.split(r"[.!?]+", text) if chunk.strip()]
+    if not chunks:
+        return 0
+    counts: Dict[str, int] = {}
+    for chunk in chunks:
+        counts[chunk] = counts.get(chunk, 0) + 1
+    return max(counts.values())
+
+
+def _lexical_diversity(text: str) -> float:
+    words = re.findall(r"[a-zA-Z']+", text.lower())
+    if not words:
+        return 1.0
+    return len(set(words)) / max(len(words), 1)
+
+
+def _build_stt_sanity_report(transcript: str) -> Dict[str, Any]:
+    """Detect obvious STT hallucination patterns before agent routing.
+
+    This is intentionally conservative: ordinary speech is accepted, while
+    repeated, low-diversity, high-risk transcripts are flagged for confirmation
+    instead of being blindly passed to the assistant as user intent.
+    """
+    cleaned = _normalize_transcript_for_sanity(transcript)
+    flags = []
+    risk_level = "normal"
+    action = "accept"
+
+    if not cleaned:
+        return {
+            "ok": False,
+            "risk_level": "caution",
+            "flags": ["empty_transcript"],
+            "recommended_action": "ask_repeat",
+            "cleaned_transcript": "",
+        }
+
+    repeated = _repeated_sentence_count(cleaned)
+    if repeated >= 2:
+        flags.append(f"repeated_sentence_x{repeated}")
+
+    diversity = _lexical_diversity(cleaned)
+    if len(cleaned.split()) >= 8 and diversity < 0.45:
+        flags.append(f"low_lexical_diversity_{diversity:.2f}")
+
+    if any(re.search(pattern, cleaned.lower()) for pattern in STT_SANITY_HIGH_RISK_PATTERNS):
+        flags.append("high_risk_terms")
+        risk_level = "high_confirmation"
+        action = "confirm_high_risk"
+
+    if flags and action == "accept":
+        risk_level = "caution"
+        action = "ask_repeat"
+
+    return {
+        "ok": not flags,
+        "risk_level": risk_level,
+        "flags": flags,
+        "recommended_action": action,
+        "cleaned_transcript": cleaned,
+    }
+
+
+def _apply_stt_sanity_guard(result: Dict[str, Any], stt_config: Optional[dict] = None) -> Dict[str, Any]:
+    """Attach sanity metadata and optionally block suspicious transcripts."""
+    if not result.get("success"):
+        return result
+
+    transcript = result.get("transcript", "")
+    if not isinstance(transcript, str):
+        return result
+
+    sanity = _build_stt_sanity_report(transcript)
+    guarded = dict(result)
+    guarded["stt_sanity"] = sanity
+
+    if _stt_sanity_guard_enabled(stt_config) and sanity["recommended_action"] != "accept":
+        guarded["success"] = False
+        guarded["error"] = (
+            "STT sanity guard flagged this transcript as suspicious; "
+            f"recommended_action={sanity['recommended_action']} flags={','.join(sanity['flags'])}."
+        )
+    return guarded
 
 
 def _has_openai_audio_backend() -> bool:
@@ -1660,38 +1779,38 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
         model_name = _normalize_local_model(
             model or local_cfg.get("model", DEFAULT_LOCAL_MODEL)
         )
-        return _transcribe_local(file_path, model_name)
+        return _apply_stt_sanity_guard(_transcribe_local(file_path, model_name), stt_config)
 
     if provider == "local_command":
         local_cfg = stt_config.get("local", {})
         model_name = _normalize_local_command_model(
             model or local_cfg.get("model", DEFAULT_LOCAL_MODEL)
         )
-        return _transcribe_local_command(file_path, model_name)
+        return _apply_stt_sanity_guard(_transcribe_local_command(file_path, model_name), stt_config)
 
     if provider == "groq":
         model_name = model or DEFAULT_GROQ_STT_MODEL
-        return _transcribe_groq(file_path, model_name)
+        return _apply_stt_sanity_guard(_transcribe_groq(file_path, model_name), stt_config)
 
     if provider == "openai":
         openai_cfg = stt_config.get("openai", {})
         model_name = model or openai_cfg.get("model", DEFAULT_STT_MODEL)
-        return _transcribe_openai(file_path, model_name)
+        return _apply_stt_sanity_guard(_transcribe_openai(file_path, model_name), stt_config)
 
     if provider == "mistral":
         mistral_cfg = stt_config.get("mistral", {})
         model_name = model or mistral_cfg.get("model", DEFAULT_MISTRAL_STT_MODEL)
-        return _transcribe_mistral(file_path, model_name)
+        return _apply_stt_sanity_guard(_transcribe_mistral(file_path, model_name), stt_config)
 
     if provider == "xai":
         # xAI Grok STT doesn't use a model parameter — pass through for logging
         model_name = model or "grok-stt"
-        return _transcribe_xai(file_path, model_name)
+        return _apply_stt_sanity_guard(_transcribe_xai(file_path, model_name), stt_config)
 
     if provider == "elevenlabs":
         elevenlabs_cfg = stt_config.get("elevenlabs", {})
         model_name = model or elevenlabs_cfg.get("model_id", DEFAULT_ELEVENLABS_STT_MODEL)
-        return _transcribe_elevenlabs(file_path, model_name)
+        return _apply_stt_sanity_guard(_transcribe_elevenlabs(file_path, model_name), stt_config)
 
     # User-declared command-type provider
     # (``stt.providers.<name>: type: command``). Fires after the built-in
@@ -1701,12 +1820,15 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
     # local than a plugin install (same precedence rule as TTS PR #17843).
     command_provider_config = _resolve_command_stt_provider_config(provider, stt_config)
     if command_provider_config is not None:
-        return _transcribe_command_stt(
-            file_path,
-            provider,
-            command_provider_config,
+        return _apply_stt_sanity_guard(
+            _transcribe_command_stt(
+                file_path,
+                provider,
+                command_provider_config,
+                stt_config,
+                model_override=model,
+            ),
             stt_config,
-            model_override=model,
         )
 
     # Plugin-registered STT backend (e.g. OpenRouter, SenseAudio,
@@ -1733,7 +1855,7 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
         language=plugin_language,
     )
     if plugin_result is not None:
-        return plugin_result
+        return _apply_stt_sanity_guard(plugin_result, stt_config)
 
     # No provider available
     return {

@@ -70,6 +70,51 @@ def clean_env(monkeypatch):
 
 
 # ============================================================================
+# STT sanity guard
+# ============================================================================
+
+class TestSttSanityGuard:
+    def test_normal_transcript_is_annotated_and_allowed(self):
+        from tools.transcription_tools import _apply_stt_sanity_guard
+
+        result = _apply_stt_sanity_guard(
+            {"success": True, "transcript": "Can you go into the voice settings and fix things please", "provider": "groq"},
+            {"sanity_guard": {"enabled": True}},
+        )
+
+        assert result["success"] is True
+        assert result["stt_sanity"]["ok"] is True
+        assert result["stt_sanity"]["recommended_action"] == "accept"
+
+    def test_suspicious_high_risk_repetition_blocks_when_enabled(self):
+        from tools.transcription_tools import _apply_stt_sanity_guard
+
+        transcript = "I'm the one who's shot with a gun. I'm the one who's shot with a gun. I'm the one who's shot with a gun."
+        result = _apply_stt_sanity_guard(
+            {"success": True, "transcript": transcript, "provider": "groq"},
+            {"sanity_guard": {"enabled": True}},
+        )
+
+        assert result["success"] is False
+        assert "STT sanity guard flagged" in result["error"]
+        assert result["stt_sanity"]["recommended_action"] == "confirm_high_risk"
+        assert "high_risk_terms" in result["stt_sanity"]["flags"]
+        assert "repeated_sentence_x3" in result["stt_sanity"]["flags"]
+
+    def test_suspicious_transcript_is_only_annotated_when_disabled(self):
+        from tools.transcription_tools import _apply_stt_sanity_guard
+
+        transcript = "I'm the one who's shot with a gun. I'm the one who's shot with a gun."
+        result = _apply_stt_sanity_guard(
+            {"success": True, "transcript": transcript, "provider": "groq"},
+            {"sanity_guard": {"enabled": False}},
+        )
+
+        assert result["success"] is True
+        assert result["stt_sanity"]["recommended_action"] == "confirm_high_risk"
+
+
+# ============================================================================
 # _get_provider — full permutation matrix
 # ============================================================================
 
