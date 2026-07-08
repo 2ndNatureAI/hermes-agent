@@ -589,8 +589,26 @@ TOOLSET_ENV_REQUIREMENTS = {
 
 
 def _cua_driver_cmd() -> str:
-    """Return the cua-driver executable name/path, honoring non-empty overrides."""
-    return os.environ.get("HERMES_CUA_DRIVER_CMD", "").strip() or "cua-driver"
+    """Return the cua-driver executable name/path, honoring non-empty overrides.
+
+    Resolution order:
+    1. HERMES_CUA_DRIVER_CMD for explicit runtime/testing overrides.
+    2. config.yaml mcp_servers.cua-driver.command so the CLI doctor/status and
+       the runtime backend can honor a locally pinned CUA binary.
+    3. PATH lookup fallback: cua-driver.
+    """
+    env_cmd = os.environ.get("HERMES_CUA_DRIVER_CMD", "").strip()
+    if env_cmd:
+        return env_cmd
+    try:
+        cfg = load_config() or {}
+        server = ((cfg.get("mcp_servers") or {}).get("cua-driver") or {})
+        cfg_cmd = str(server.get("command") or "").strip()
+        if cfg_cmd:
+            return cfg_cmd
+    except Exception:
+        pass
+    return "cua-driver"
 
 
 def _cua_driver_env() -> dict:

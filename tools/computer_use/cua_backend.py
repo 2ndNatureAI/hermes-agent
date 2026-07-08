@@ -73,7 +73,28 @@ logger = logging.getLogger(__name__)
 # only have *looked* like it pinned. For a reproducible version, point
 # `HERMES_CUA_DRIVER_CMD` at a specific binary instead.
 
-_CUA_DRIVER_CMD = os.environ.get("HERMES_CUA_DRIVER_CMD", "cua-driver")
+def _resolve_default_cua_driver_cmd() -> str:
+    """Resolve cua-driver path for the runtime backend.
+
+    HERMES_CUA_DRIVER_CMD stays highest priority. If unset, honor the configured
+    MCP server command so local version pins are shared by MCP, doctor, and the
+    computer_use backend instead of falling back to a blocked PATH binary.
+    """
+    env_cmd = os.environ.get("HERMES_CUA_DRIVER_CMD", "").strip()
+    if env_cmd:
+        return env_cmd
+    try:
+        from hermes_cli.config import load_config
+        cfg = load_config() or {}
+        server = ((cfg.get("mcp_servers") or {}).get("cua-driver") or {})
+        cfg_cmd = str(server.get("command") or "").strip()
+        if cfg_cmd:
+            return cfg_cmd
+    except Exception:
+        pass
+    return "cua-driver"
+
+_CUA_DRIVER_CMD = _resolve_default_cua_driver_cmd()
 _CUA_DRIVER_ARGS = ["mcp"]  # stdio MCP transport (fallback when the
                             # driver doesn't expose `manifest` — see
                             # `_resolve_mcp_invocation` below)
