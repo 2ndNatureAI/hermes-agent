@@ -275,6 +275,45 @@ def _corrupt_fts_index_data(db_path: Path) -> None:
     conn.close()
 
 
+def test_db_opens_cleanly_can_skip_full_integrity_scan(monkeypatch, tmp_path):
+    """Routine doctor probes avoid full integrity scans on huge live state DBs."""
+    import hermes_state
+
+    calls = []
+    connect_kwargs = {}
+
+    class _Cursor:
+        def fetchone(self):
+            return (1,)
+
+        def fetchall(self):
+            return [("ok",)]
+
+    class _Conn:
+        def execute(self, sql, *args):
+            calls.append(sql)
+            if sql == "PRAGMA integrity_check":
+                raise AssertionError("full integrity_check should be skipped")
+            return _Cursor()
+
+        def close(self):
+            calls.append("close")
+
+    def fake_connect(*args, **kwargs):
+        connect_kwargs.update(kwargs)
+        return _Conn()
+
+    monkeypatch.setattr(hermes_state.sqlite3, "connect", fake_connect)
+
+    assert hermes_state._db_opens_cleanly(
+        tmp_path / "state.db",
+        integrity_check=False,
+        busy_timeout_ms=1234,
+    ) is None
+    assert "PRAGMA integrity_check" not in calls
+    assert connect_kwargs["timeout"] == 1.234
+
+
 def test_fts_write_corruption_detected_by_write_probe(tmp_path):
     """_db_opens_cleanly's rolled-back write probe flags FTS write corruption."""
     from hermes_state import _db_opens_cleanly

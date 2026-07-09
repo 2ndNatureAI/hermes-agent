@@ -436,24 +436,40 @@ def _backup_db_file(db_path: Path) -> Optional[Path]:
         return None
 
 
-def _db_opens_cleanly(db_path: Path) -> Optional[str]:
+def _db_opens_cleanly(
+    db_path: Path,
+    *,
+    integrity_check: bool = True,
+    busy_timeout_ms: int = 2000,
+) -> Optional[str]:
     """Probe a DB on a fresh connection. Returns None if healthy, else a reason.
 
     Runs the same first-statement (``PRAGMA journal_mode``) that trips the
-    malformed-schema parse, then ``PRAGMA integrity_check`` and a canonical
-    ``sessions`` read, and finally a rolled-back ``messages`` write so that
-    FTS5 index corruption — which leaves base-table reads and
+    malformed-schema parse, optionally runs ``PRAGMA integrity_check`` and a
+    canonical ``sessions`` read, and finally a rolled-back ``messages`` write so
+    that FTS5 index corruption — which leaves base-table reads and
     ``integrity_check`` passing while every ``INSERT INTO messages`` fails
     through the FTS triggers — is reported as unhealthy rather than slipping
     past as a false "ok" (#50502).
+
+    ``integrity_check=False`` is intended for routine health checks such as
+    ``hermes doctor``. On large live ``state.db`` files, a full SQLite integrity
+    scan can take minutes and make doctor look hung; explicit repair paths keep
+    the default full check.
     """
-    conn = sqlite3.connect(str(db_path), isolation_level=None)
+    conn = sqlite3.connect(
+        str(db_path),
+        isolation_level=None,
+        timeout=max(float(busy_timeout_ms) / 1000.0, 0.1),
+    )
     try:
+        conn.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")
         conn.execute("PRAGMA journal_mode").fetchone()
-        rows = conn.execute("PRAGMA integrity_check").fetchall()
-        problems = [str(r[0]) for r in rows if r and str(r[0]).lower() != "ok"]
-        if problems:
-            return "; ".join(problems[:3])
+        if integrity_check:
+            rows = conn.execute("PRAGMA integrity_check").fetchall()
+            problems = [str(r[0]) for r in rows if r and str(r[0]).lower() != "ok"]
+            if problems:
+                return "; ".join(problems[:3])
         conn.execute("SELECT COUNT(*) FROM sessions").fetchone()
 
         # FTS write probe: drive a row through the messages_fts* triggers in a
