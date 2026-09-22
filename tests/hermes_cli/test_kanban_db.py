@@ -565,6 +565,13 @@ def test_infrastructure_spawn_refusal_never_charges_the_card(
     failure on the same card still counts."""
     import tools.process_registry as process_registry
 
+    # The refusal lives inside restart_safe_gateway_child_argv's Linux gate
+    # (_IS_LINUX short-circuits to in_process first); on Windows the systemd
+    # topology patched below is never reached, so the card would be charged
+    # for an infrastructure refusal that cannot happen there.
+    if not process_registry._IS_LINUX:
+        pytest.skip("systemd scope topology only exists on Linux")
+
     monkeypatch.setattr(process_registry, "_is_supervised_gateway_process", lambda: True)
     monkeypatch.setenv("INVOCATION_ID", "managed-gateway")
     monkeypatch.setattr(process_registry, "_systemd_run_user_scope_available", lambda: False)
@@ -804,7 +811,9 @@ def test_worktree_workspace_explicit_target_materializes_linked_worktree(kanban_
         capture_output=True,
         text=True,
     ).stdout
-    assert f"worktree {target}" in listed
+    # git prints worktree paths with forward slashes on every host; comparing
+    # against str(target) fails on Windows, where the path separator is '\'.
+    assert f"worktree {target.as_posix()}" in listed
     assert f"branch refs/heads/{branch}" in listed
 
 
@@ -1116,7 +1125,18 @@ class TestSharedBoardPaths:
                 captured["env"] = kwargs.get("env", {})
                 self.pid = 4242
 
+            def poll(self):
+                # Windows dispatch parks every spawned Popen in
+                # _live_worker_procs for reap_worker_zombies; a fake without
+                # poll() leaks into later dispatcher tests in the same
+                # subprocess and crashes their reclaim phase.
+                return None  # still running
+
         monkeypatch.setattr("subprocess.Popen", _FakePopen)
+        # Windows-only: _default_spawn parks the Popen in this module dict for
+        # reap_worker_zombies; swap it so the fake cannot leak into later
+        # dispatcher tests running in the same subprocess.
+        monkeypatch.setattr(kbd, "_live_worker_procs", {})
 
         task = kb.Task(
             id="t_dispatch_env",
@@ -1386,6 +1406,34 @@ def test_link_tasks_no_dependency_wait_when_parent_done(kanban_home):
         assert kb.get_task(conn, child).status == "ready"
         kinds = [e.kind for e in kb.list_events(conn, child)]
         assert "dependency_wait" not in kinds
+
+
+def test_create_task_zero_max_runtime_stored_as_null(kanban_home):
+    """A stored cap of 0 is a poison value: enforce_max_runtime treats any
+    non-NULL cap as a hard deadline (elapsed >= limit holds on its first tick),
+    so a 0-cap card is SIGTERMed the moment a worker is claimed (#09-17
+    sideproject batch, one 0-cap card died instantly). 0/negative = "no cap"
+    and must be stored as NULL, the historical default for unset caps."""
+    with kbc.connect() as conn:
+        t0 = kb.create_task(conn, title="zero cap", assignee="a", max_runtime_seconds=0)
+        tneg = kb.create_task(conn, title="negative cap", assignee="a",
+                              max_runtime_seconds=-5)
+        tnone = kb.create_task(conn, title="no cap", assignee="a")
+        tpos = kb.create_task(conn, title="real cap", assignee="a",
+                              max_runtime_seconds=3600)
+        rows = conn.execute(
+            "SELECT id, max_runtime_seconds FROM tasks WHERE id IN (?, ?, ?, ?)",
+            (t0, tneg, tnone, tpos),
+        ).fetchall()
+        caps = {row["id"]: row["max_runtime_seconds"] for row in rows}
+        assert caps[t0] is None, "0 must be stored as NULL, not 0"
+        assert caps[tneg] is None, "negative must be stored as NULL, not -5"
+        assert caps[tnone] is None
+        assert caps[tpos] == 3600, "a real positive cap must survive unchanged"
+        # And the reaper agrees: a claimed 0-cap card is not reapable.
+        kb.claim_task(conn, t0, claimer="worker:1")
+        kbd._set_worker_pid(conn, t0, 12345)
+        assert kbd.enforce_max_runtime(conn, signal_fn=lambda _p, _s: None) == []
 
 
 def test_create_task_with_open_parent_emits_dependency_wait(kanban_home):

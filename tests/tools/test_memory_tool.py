@@ -111,6 +111,10 @@ def store(tmp_path, monkeypatch):
 
 
 class TestMemoryFileLockPermissions:
+    # POSIX contract: os.fchmod and real 0o600 st_mode bits do not exist on
+    # Windows (st_mode there is always 0o100666; only the read-only bit is
+    # real), so owner-only lock permissions are only assertable on POSIX hosts.
+    @pytest.mark.linux_only
     def test_new_lock_file_is_owner_only_under_permissive_umask(self, tmp_path):
         memory_path = tmp_path / "MEMORY.md"
         previous_umask = os.umask(0o002)
@@ -123,6 +127,7 @@ class TestMemoryFileLockPermissions:
         lock_path = tmp_path / "MEMORY.md.lock"
         assert stat.S_IMODE(lock_path.stat().st_mode) == 0o600
 
+    @pytest.mark.linux_only
     def test_existing_loose_lock_file_is_tightened(self, tmp_path):
         memory_path = tmp_path / "MEMORY.md"
         lock_path = tmp_path / "MEMORY.md.lock"
@@ -134,7 +139,7 @@ class TestMemoryFileLockPermissions:
 
         assert stat.S_IMODE(lock_path.stat().st_mode) == 0o600
 
-    @pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="O_NOFOLLOW unavailable")
+    @pytest.mark.linux_only
     def test_lock_file_symlink_is_refused(self, tmp_path):
         memory_path = tmp_path / "MEMORY.md"
         outside = tmp_path / "outside"
