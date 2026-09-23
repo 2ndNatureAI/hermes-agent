@@ -1090,6 +1090,12 @@ def build_turn_context(
     # so it runs concurrently with the turn. Daemon thread, no-op once titled.
     _maybe_title_session_at_turn_start(agent, messages)
 
+    # Publish the resolved route for the kanban run-fields stamp: the completion
+    # handlers read this contextvar (via model_tools dispatch) to record what
+    # model/provider/effort this turn actually used. Best-effort; see the helper.
+    from agent.conversation_loop import _publish_resolved_state
+    _publish_resolved_state(agent)
+
     return TurnContext(
         user_message=user_message, original_user_message=original_user_message, messages=messages,
         conversation_history=conversation_history, active_system_prompt=active_system_prompt,

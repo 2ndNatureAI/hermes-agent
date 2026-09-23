@@ -830,10 +830,13 @@ def _execute_tool(function_name: str, function_args: Dict[str, Any], original_ar
     # token/cost accounting (load-bearing run fields) without every call site
     # having to pass them explicitly. Fail-closed: absent → nothing stamped.
     try:
-        from agent.model_resolved import current_resolved_state
+        from agent.model_resolved import current_agent_ref, current_resolved_state
         state = current_resolved_state.get()
         if state:
             dispatch_kwargs["agent_state"] = state
+        agent_ref = current_agent_ref.get()
+        if agent_ref is not None:
+            dispatch_kwargs["agent_ref"] = agent_ref
     except Exception:
         pass
 

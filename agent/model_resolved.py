@@ -1,22 +1,22 @@
-"""Per-turn resolved model/provider state + token usage accounting that kanban
-completion handlers can auto-stamp onto the run's metadata blob without every
-call site passing them explicitly.
+"""Per-turn resolved model/provider state that kanban completion handlers can
+auto-stamp onto the run's metadata blob without every call site passing them
+explicitly.
 
 A contextvar is the right shape here (not a module global, not thread-local):
 the agent loop may hop providers mid-turn inside a single thread, and
 delegate_task children each get their own context, so a plain global or
 thread-local would read the wrong process-wide value at dispatch time.
 
-Set once at turn start by the agent for the primary route; reset at turn end.
-Defaults to ``None`` so callers that cannot read it (cron jobs, non-agent
-invokers) see nothing stamped and the field stays NULL — no schema migration,
-no disruption to running workers.
+Set once at turn start by the agent for the primary route (and again whenever
+a fallback swaps the route mid-turn); reset at turn end. Defaults to ``None``
+so callers that cannot read it (cron jobs, non-agent invokers) see nothing
+stamped and the field stays NULL — no schema migration, no disruption to
+running workers.
 
-Usage accounting mirrors ``agent._USAGE_STATE`` (session_prompt_tokens,
-session_completion_tokens, session_total_tokens, session_api_calls,
-session_estimated_cost_usd) at the moment the turn finalizes, so the run's
-metadata carries the actual tokens/cost the worker burned rather than a
-configured guess.
+``current_agent_ref`` carries the live agent for the same turn scope so the
+kanban completion handler can freeze a token/cost snapshot at the moment the
+worker calls ``kanban_complete`` — that call fires mid-turn, so a snapshot
+frozen at turn finalization would always miss the completion moment.
 """
 
 from __future__ import annotations
@@ -31,15 +31,16 @@ current_resolved_state: ContextVar[Optional[dict[str, Any]]] = ContextVar(
     "current_resolved_state", default=None
 )
 
-#: Per-turn token/cost snapshot captured at finalization time. Built by
-#: :func:`freeze_usage_snapshot` from the agent's accumulated usage state.
-current_usage_snapshot: ContextVar[Optional[dict[str, Any]]] = ContextVar(
-    "current_usage_snapshot", default=None
+#: The live agent object for the current turn (same scope as
+#: ``current_resolved_state``). Read by the kanban completion handler to
+#: freeze token/cost accounting at completion time; None outside a turn.
+current_agent_ref: ContextVar[Optional[Any]] = ContextVar(
+    "current_agent_ref", default=None
 )
 
 
 def freeze_usage_snapshot(agent: Any) -> dict[str, Any]:
-    """Best-effort token/cost snapshot from *agent* at finalization time.
+    """Best-effort token/cost snapshot from *agent* at completion time.
 
     Reads whatever the agent has accumulated so far (``session_*_tokens``,
     ``session_api_calls``, ``session_estimated_cost_usd``). Missing or

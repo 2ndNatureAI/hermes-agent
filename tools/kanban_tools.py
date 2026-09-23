@@ -356,28 +356,31 @@ def _merge_artifacts(metadata: Any, artifacts: list[str]) -> dict:
     return metadata
 
 
-def _auto_stamp_run_fields(metadata: dict, agent_state: Any) -> dict:
+def _auto_stamp_run_fields(metadata: dict, agent_state: Any, agent_ref: Any = None) -> dict:
     """Merge the load-bearing run fields (#2 resolved_model, #3 token_usage)
     into *metadata* from the worker agent's own runtime state when the dispatch
     path carried it. Missing *agent_state* → no-op (older/other invokers are
     unaffected). Returns *metadata* mutated in place, for chaining with the
     artifact merge that follows.
 
-    ``resolved_model`` is taken from the turn-start resolved-route snapshot
-    (may differ from the task's ``model_override`` when the profile fell back
-    mid-run — that difference is exactly what we want recorded).
+    *agent_state* is the turn-start resolved-route snapshot published by
+    ``agent.conversation_loop._publish_resolved_state`` — a flat dict of
+    model/provider/base_url/reasoning_effort/is_fallback. (It may differ from
+    the task's ``model_override`` when the profile fell back mid-run — that
+    difference is exactly what we want recorded.)
 
-    ``token_usage`` is the per-run best-effort snapshot captured at
-    finalization time (input/output/total tokens, api_calls, cost_usd). It is
-    NOT a billing-grade audit record; it is enough to answer "what did this run
+    ``token_usage`` is frozen live from *agent_ref* (the same-turn agent) at
+    completion time: ``kanban_complete`` fires mid-turn, so a snapshot taken
+    at turn finalization would always miss the completion moment. It is NOT a
+    billing-grade audit record; it is enough to answer "what did this run
     cost" and to drive matched-pairs model-routing analysis from recorded
     history.
     """
     if not agent_state or not isinstance(agent_state, dict):
         return metadata
-    updated = dict(metadata)
+    updated = dict(metadata or {})
 
-    resolved = agent_state.get("resolved")
+    resolved = agent_state if agent_state.get("model") or agent_state.get("provider") else agent_state.get("resolved")
     if isinstance(resolved, dict) and resolved:
         updated["resolved_model"] = {
             "model": str(resolved.get("model") or "").strip() or None,
@@ -394,6 +397,12 @@ def _auto_stamp_run_fields(metadata: dict, agent_state: Any) -> dict:
             updated.pop("resolved_model", None)
 
     usage = agent_state.get("usage")
+    if not usage and agent_ref is not None:
+        try:
+            from agent.model_resolved import freeze_usage_snapshot
+            usage = freeze_usage_snapshot(agent_ref)
+        except Exception:
+            usage = None
     if isinstance(usage, dict) and usage:
         up = {k: v for k, v in usage.items()
               if k in ("input_tokens", "output_tokens", "total_tokens", "api_calls", "cost_usd")
@@ -406,6 +415,63 @@ def _auto_stamp_run_fields(metadata: dict, agent_state: Any) -> dict:
     metadata.clear()
     metadata.update(updated)
     return metadata
+
+
+def _stamp_quality_on_run(conn, task_id: str, quality: dict,
+                          run_id: Optional[int] = None) -> None:
+    """Merge a quality verdict onto a run's metadata directly, absent-only.
+
+    Used by the reviewer/judge paths that carry no ``metadata`` parameter of
+    their own (``kanban_request_changes``) and by the goal-judge gate (whose
+    verdict is already paid for by the gate itself). ``run_id=None`` stamps the
+    ACTIVE run, falling back to the task's latest run once the terminal write
+    has closed it. A quality blob already on the run wins (worker self-report
+    or an earlier verdict) — this helper never overwrites; the terminal
+    completion merge then layers worker metadata OVER everything.
+    Best-effort: a failed stamp never blocks the lifecycle transition.
+    """
+    try:
+        import json as _json
+        from hermes_cli import kanban_db as _kbmod
+        if run_id is None:
+            run_id = _kbmod._current_run_id(conn, task_id)
+        if run_id is None:
+            row = conn.execute(
+                "SELECT id FROM task_runs WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+            run_id = row["id"] if row else None
+        if run_id is None or not isinstance(quality, dict) or not quality:
+            return
+        row = conn.execute(
+            "SELECT metadata FROM task_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        existing = _kbmod._json_dict(row["metadata"]) if row and row["metadata"] else {}
+        if existing.get("quality") is not None:
+            return
+        merged = dict(existing)
+        merged["quality"] = quality
+        conn.execute(
+            "UPDATE task_runs SET metadata = ? WHERE id = ?",
+            (_json.dumps(merged, ensure_ascii=False), run_id),
+        )
+    except Exception:
+        logger.debug("quality stamp on run for %s failed", task_id, exc_info=True)
+
+
+def _quality_from_judge(verdict: str, reason: str) -> Optional[dict]:
+    """Map a goal-judge verdict to the run's ``metadata.quality`` blob.
+
+    Verdict-shaped, not a fabricated numeric score: the judge returns
+    done/continue/blocked/wait, so the stamp records exactly that. ``continue``
+    never reaches here (the gate raises before stamping on non-done verdicts).
+    """
+    if not verdict:
+        return None
+    blob: dict = {"set_by": "goal_judge", "verdict": str(verdict)}
+    if reason:
+        blob["reason"] = str(reason)[:200]
+    return blob
 
 
 def _require_text(args: dict, name: str, message: Optional[str] = None) -> Any:
@@ -496,11 +562,13 @@ _GOAL_GATE_MESSAGES = {
             "matching the card before requesting review.")}}
 
 
-def _goal_gate(tool_name: str, task, tid: str, evidence: str) -> None:
+def _goal_gate(tool_name: str, task, tid: str, evidence: str) -> Optional[dict]:
     """Goal-mode pre-handoff judge gate: a worker must not complete / request
     review before acceptance criteria are met. ``blocked`` gets its own
     guidance; any other non-``done`` verdict gets the ``continue`` guidance.
-    A broken judge fails open (logged) so it cannot permanently wedge work."""
+    A broken judge fails open (logged) so it cannot permanently wedge work.
+    Returns the judge's quality blob on a ``done`` verdict (None otherwise) so
+    goal-mode cards accumulate judge-graded telemetry with no extra judge call."""
     if not task or not task.goal_mode or not _goal_judge_available():
         return
     try:
@@ -522,9 +590,9 @@ def _goal_gate(tool_name: str, task, tid: str, evidence: str) -> None:
         # ``judge_goal`` fails open to ``continue`` on transport errors (relay 400, auth, timeout);
         # an unreachable judge is not a human "not done" and must not reject the handoff (#83610).
         logger.warning("goal judge unreachable (%s), allowing lifecycle handoff", reason)
-        return
+        return None
     if verdict == "done":
-        return
+        return _quality_from_judge(verdict, reason)
     key = "blocked" if verdict == "blocked" else "continue"
     raise _Reject(_GOAL_GATE_MESSAGES[tool_name][key].format(reason=reason, tid=tid))
 
@@ -739,14 +807,21 @@ def _handle_complete(args: dict, **kw) -> str:
     _require_dict_metadata(metadata)
     metadata = _stamp_worker_session_metadata(tid, metadata)
     # Auto-stamp the load-bearing run fields from the worker agent's own
-    # runtime state when the dispatch path carried it (agent-loop context).
-    _auto_stamp_run_fields(metadata, kw.get("agent_state"))
+    # runtime state when the dispatch path carried it (agent-loop context):
+    # resolved route + a live token/cost freeze at completion time. A worker
+    # that omitted metadata still gets its stamps (the merge mutates in place,
+    # so materialize the dict first when there is something to stamp).
+    if (kw.get("agent_state") or kw.get("agent_ref")) and not isinstance(metadata, dict):
+        metadata = {}
+    _auto_stamp_run_fields(metadata, kw.get("agent_state"), kw.get("agent_ref"))
     with _board(args.get("board")) as (kb, conn):
         # Goal-mode pre-completion judge gate (Issue #38367). Prevent workers from bypassing the auxiliary
         # judge by calling kanban_complete before acceptance criteria are met. Only enforce when a judge is
         # actually reachable — see _goal_judge_available for why an unavailable judge fails open.
         task = kb.get_task(conn, tid)
-        _goal_gate("kanban_complete", task, tid, (summary or result or "").strip())
+        judge_quality = _goal_gate("kanban_complete", task, tid, (summary or result or "").strip())
+        if judge_quality:
+            _stamp_quality_on_run(conn, tid, judge_quality)
         try:
             ok = kb.complete_task(
                 conn, tid, result=result, summary=summary, metadata=metadata,
@@ -798,6 +873,19 @@ def _handle_complete(args: dict, **kw) -> str:
                     f"{detail}; complete the parents first (done or archived)")
             _check(False, (task.last_failure_error if task else None) or
                    f"could not complete {tid} (unknown id, stale run, or already terminal)")
+        # Reviewer telemetry: an approving completion is the review pass's
+        # verdict on the IMPLEMENTER's run (the one that ended review_requested),
+        # never on the reviewer's own run. Absent-only merge — a worker-supplied
+        # quality blob wins.
+        impl_run = conn.execute(
+            "SELECT id FROM task_runs WHERE task_id = ? AND outcome = 'review_requested' "
+            "ORDER BY id DESC LIMIT 1", (tid,),
+        ).fetchone()
+        if impl_run:
+            _stamp_quality_on_run(
+                conn, tid,
+                {"set_by": "reviewer", "verdict": "approved"},
+                run_id=impl_run["id"])
         run = kb.latest_run(conn, tid)
         # Artifact staging is atomic with the completion write, so a worker that
         # read `kanban_attachments` before completing saw an empty list and has
@@ -877,7 +965,10 @@ def _handle_request_review(args: dict, **kw) -> str:
                f"reviewer profile {reviewer!r} is not installed. "
                f"Installed profiles: {', '.join(list_profile_names())}")
     with _board(args.get("board")) as (kb, conn):
-        _goal_gate("kanban_request_review", kb.get_task(conn, tid), tid, summary)
+        task = kb.get_task(conn, tid)
+        judge_quality = _goal_gate("kanban_request_review", task, tid, summary)
+        if judge_quality:
+            _stamp_quality_on_run(conn, tid, judge_quality)
         try:
             ok, fail_reason = kb.request_review(
                 conn, tid, summary=summary, metadata=metadata, reviewer=reviewer,
@@ -906,6 +997,13 @@ def _handle_request_changes(args: dict, **kw) -> str:
         ok, detail = kb.request_changes(
             conn, tid, reason=reason, expected_run_id=_worker_run_id(tid))
         _check(ok, f"could not request changes for {tid}: {detail or 'invalid review state'}")
+        # Reviewer telemetry: the changes_requested verdict is the review pass's
+        # quality record for the implementer's run (no metadata param exists on
+        # this transition). Absent-only merge — a worker-supplied quality blob wins.
+        _stamp_quality_on_run(
+            conn, tid,
+            {"set_by": "reviewer", "verdict": "changes_requested",
+             "reason": str(reason)[:200]})
         return _ok_landed(kb, conn, tid, "ready", implementer=detail)
 
 
