@@ -818,13 +818,24 @@ def _execute_tool(function_name: str, function_args: Dict[str, Any], original_ar
                   *, user_task: Optional[str], enabled_tools: Optional[List[str]], skip_tool_execution_middleware: bool) -> Any:
     """Run the registry handler (through tool-execution middleware unless skipped)
     with the approval observability context bound for the duration."""
-    dispatch_kwargs: Dict[str, Any] = {"task_id": ids.task_id, "session_id": ids.session_id}
+    dispatch_kwargs: Dict[str, Any] = {
+        "task_id": ids.task_id,
+        "session_id": ids.session_id,
+    }
     if function_name == "execute_code":
-        # Prefer the caller's list so subagents can't overwrite the parent's
-        # tool set via the process-global.
         dispatch_kwargs["enabled_tools"] = enabled_tools if enabled_tools is not None else _last_resolved_tool_names
     else:
         dispatch_kwargs["user_task"] = user_task
+    # Let kanban completion handlers auto-stamp the worker's resolved model +
+    # token/cost accounting (load-bearing run fields) without every call site
+    # having to pass them explicitly. Fail-closed: absent → nothing stamped.
+    try:
+        from agent.model_resolved import current_resolved_state
+        state = current_resolved_state.get()
+        if state:
+            dispatch_kwargs["agent_state"] = state
+    except Exception:
+        pass
 
     def _dispatch(next_args: Dict[str, Any]) -> Any:
         from tools.connectors import dispatch_connector_call, is_connector_name

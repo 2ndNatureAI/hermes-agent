@@ -1267,7 +1267,9 @@ def create_task(
     forces ``triage``; ``initial_status="blocked"`` parks it for human ops.
     ``idempotency_key``: an existing non-archived task with the key is returned
     instead of a duplicate. ``max_runtime_seconds``: cap before the dispatcher
-    SIGTERMs and re-queues. ``model_override``/``provider_override`` pin the
+    SIGTERMs and re-queues; ``0``/negative means "no cap" and is stored as
+    ``NULL`` — the reaper treats any stored value as a hard deadline, so a
+    stored 0 would insta-kill the worker on its first reap tick. ``model_override``/``provider_override`` pin the
     worker model (provider requires model); ``reasoning_effort`` is independent.
     ``creator_task_id``: inherit durable session/subscriptions independently of
     dependency edges; an explicit ``session_id`` still wins.
@@ -1282,6 +1284,11 @@ def create_task(
     completion_contract = validate_contract(completion_contract)
     model_override, provider_override = _validate_model_override(model_override, provider_override)
     reasoning_effort = normalize_reasoning_effort(reasoning_effort)
+    # A stored cap of 0 (or negative) is a poison value: the reaper treats any
+    # non-NULL cap as a hard deadline (elapsed >= limit on its first tick), so a
+    # 0-cap worker is SIGTERMed the moment it is claimed. 0/negative = "no cap".
+    if max_runtime_seconds is not None and max_runtime_seconds <= 0:
+        max_runtime_seconds = None
     assignee = _canonical_assignee(assignee)
     if not title or not title.strip():
         raise ValueError("title is required")
@@ -1451,6 +1458,65 @@ def _missing_task_ids(conn: sqlite3.Connection, ids: Iterable[str]) -> list[str]
     rows = conn.execute(f"SELECT id FROM tasks WHERE id IN ({placeholders})", ids).fetchall()
     present = {r["id"] for r in rows}
     return [p for p in ids if p not in present]
+
+
+def _all_board_db_paths() -> list[tuple[str, Path]]:
+    """``[(slug, resolved_db_path)]`` for every board that holds a DB on disk.
+
+    Computes paths directly from ``boards_root()`` and the known DB filename so
+    an active ``HERMES_KANBAN_DB`` env override (dispatcher-injected on workers)
+    does not redirect every sibling board query to one board's DB. This is what
+    the cross-board phantom resolver needs; it is NOT a general-purpose path
+    resolver (use :func:`kanban_db_path` for that, env override and all).
+    """
+    out: list[tuple[str, Path]] = []
+    default = kanban_db_path(board=DEFAULT_BOARD).resolve()
+    out.append((str(DEFAULT_BOARD), default))
+    root = boards_root()
+    if not root.is_dir():
+        return out
+    for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+        if not child.is_dir():
+            continue
+        try:
+            slug = _normalize_board_slug(child.name)
+        except ValueError:
+            continue
+        db = child / "kanban.db"
+        if slug and slug not in {s for s, _ in out} and db.exists():
+            out.append((slug, db.resolve()))
+    return out
+
+
+def _missing_task_ids_across_boards(
+    conn: sqlite3.Connection, ids: Iterable[str],
+) -> tuple[list[str], dict[str, set[str]]]:
+    """Return ``(phantom_ids, present_on)``.
+
+    A candidate is "phantom" only when it is absent from EVERY board DB on disk.
+    Opens each board's DB by its RESOLVED path (not via the ``board=`` resolver,
+    which inherits the dispatcher-injected ``HERMES_KANBAN_DB`` override) so each
+    sibling board is checked against its own file. ``present_on`` maps candidate
+    id -> set of board slugs where it exists, so the advisory event can say "this
+    id exists on board X" instead of silently docking an honest agent.
+    """
+    from hermes_cli.kanban_db_connect import connect as _connect_direct
+
+    id_list = list(dict.fromkeys(str(x).strip() for x in ids if str(x).strip()))
+    if not id_list:
+        return [], {}
+    present_on: dict[str, set[str]] = {cid: set() for cid in id_list}
+    for slug, db_path in _all_board_db_paths():
+        try:
+            with _connect_direct(db_path) as bc:
+                missing = set(_missing_task_ids(bc, id_list))
+                for cid in id_list:
+                    if cid not in missing:
+                        present_on[cid].add(slug)
+        except Exception:
+            continue
+    phantom = [cid for cid, boards in present_on.items() if not boards]
+    return phantom, present_on
 
 
 def _inherit_notify_subs(
@@ -1961,6 +2027,20 @@ def _end_run(
     run_id = _current_run_id(conn, task_id)
     if run_id is None:
         return None
+    # Merge completion metadata onto existing run metadata (claim-time stamps
+    # such as the resolved-model blob must survive the terminal write).
+    existing_meta: dict = {}
+    row = conn.execute("SELECT metadata FROM task_runs WHERE id = ?", (run_id,)).fetchone()
+    if row and row["metadata"]:
+        try:
+            existing_meta = json.loads(row["metadata"])
+            if not isinstance(existing_meta, dict):
+                existing_meta = {}
+        except Exception:
+            existing_meta = {}
+    merged_meta = dict(existing_meta)
+    if metadata:
+        merged_meta.update(metadata)
     conn.execute(
         """
         UPDATE task_runs
@@ -1974,7 +2054,7 @@ def _end_run(
          WHERE id = ?
            AND ended_at IS NULL
         """,
-        (status or outcome, outcome, summary, error, _json_or_null(metadata), now, run_id),
+        (status or outcome, outcome, summary, error, _json_or_null(merged_meta or None), now, run_id),
     )
     conn.execute("UPDATE tasks SET current_run_id = NULL WHERE id = ?", (task_id,))
     return run_id
@@ -2654,11 +2734,20 @@ def _verify_created_cards(
 _TASK_ID_PROSE_RE = re.compile(r"\bt_[a-f0-9]{8,}\b")
 
 
-def _scan_prose_for_phantom_ids(conn: sqlite3.Connection, text: str) -> list[str]:
-    """``t_<hex>`` references in ``text`` that don't resolve to a task (deduped; advisory)."""
+def _scan_prose_for_phantom_ids(
+    conn: sqlite3.Connection, text: str,
+) -> tuple[list[str], dict[str, set[str]]]:
+    """``t_<hex>`` references in ``text`` that don't resolve to a task on ANY board.
+
+    Returns ``(phantom_ids, present_on)``. The original single-board prose scan is
+    the caller's fallback when cross-board resolution is not appropriate for the
+    calling path (the hard gate on ``created_cards`` still uses the single-board
+    variant via ``verify_created_cards``, which is correct: a worker may only
+    create cards on its own board).
+    """
     if not text:
-        return []
-    return _missing_task_ids(conn, dict.fromkeys(_TASK_ID_PROSE_RE.findall(text)))
+        return [], {}
+    return _missing_task_ids_across_boards(conn, dict.fromkeys(_TASK_ID_PROSE_RE.findall(text)))
 
 
 class HallucinatedCardsError(ValueError):
@@ -2947,19 +3036,35 @@ def _flag_phantom_prose_refs(
     conn: sqlite3.Connection, task_id: str, run_id: Optional[int],
     summary: Optional[str], result: Optional[str], verified_cards: list[str],
 ) -> None:
-    """Advisory post-commit scan of summary+result for unresolvable ``t_<hex>``
-    references; emits ``suspected_hallucinated_references`` in its own txn so
-    the completion is already durable. Never blocks."""
+    """Advisory post-commit scan of summary+result for unresolvable ``t_<hex>`` refs.
+
+    Uses cross-board resolution so a reference to a card on a sibling board (most
+    commonly the routing-incident twins — a task whose DB lives on ``swarm`` but
+    the active connection was pointed at ``maya``, or vice versa) is not read as
+    a phantom and dock honest agents quality points.
+
+    The advisory event records ``boards_searched`` and, for each candidate, the
+    set of boards where it was found, so a false positive is self-evident on
+    review. Never blocks — the fix is accuracy, not severity.
+    """
     scan_text = " ".join(filter(None, [summary, result]))
     if not scan_text:
         return
-    phantom_refs = [p for p in _scan_prose_for_phantom_ids(conn, scan_text) if p not in set(verified_cards)]
-    if phantom_refs:
-        with write_txn(conn):
-            _append_event(
-                conn, task_id, "suspected_hallucinated_references",
-                {"phantom_refs": phantom_refs, "source": "completion_summary"}, run_id=run_id,
-            )
+    phantom_refs, present_on = _scan_prose_for_phantom_ids(conn, scan_text)
+    phantom_refs = [p for p in phantom_refs if p not in set(verified_cards)]
+    if not phantom_refs:
+        return
+    boards_searched = sorted({slug for slug, _ in _all_board_db_paths()})
+    with write_txn(conn):
+        _append_event(
+            conn, task_id, "suspected_hallucinated_references",
+            {
+                "phantom_refs": phantom_refs,
+                "phantom_refs_location": {p: sorted(present_on.get(p, set())) for p in phantom_refs},
+                "boards_searched": boards_searched,
+                "source": "completion_summary",
+            }, run_id=run_id,
+        )
 
 
 def _merge_completion_prose_artifacts(

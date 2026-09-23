@@ -580,6 +580,30 @@ def test_create_happy_path(worker_env):
         conn.close()
 
 
+def test_create_zero_max_runtime_stored_as_null(worker_env):
+    """Tool-surface proof for the 0-cap poison fix: kanban_create with an
+    explicit max_runtime_seconds=0 must store NULL (no cap), never 0 — the
+    reaper treats a stored 0 as an instant deadline."""
+    from tools import kanban_tools as kt
+    out = kt._handle_create({
+        "title": "zero cap via tool",
+        "assignee": "peer",
+        "max_runtime_seconds": 0,
+    })
+    d = json.loads(out)
+    assert d["ok"] is True
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_db_connect as kbc
+    conn = kbc.connect()
+    try:
+        row = conn.execute(
+            "SELECT max_runtime_seconds FROM tasks WHERE id = ?", (d["task_id"],),
+        ).fetchone()
+        assert row["max_runtime_seconds"] is None
+    finally:
+        conn.close()
+
+
 @pytest.mark.parametrize("explicit", [{"workspace_kind": "scratch"}, {"project": ""}])
 @pytest.mark.parametrize("target_scoped", [False, True])
 def test_create_explicit_scratch_ignores_ambient_board_project(

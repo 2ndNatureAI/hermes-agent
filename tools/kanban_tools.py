@@ -356,6 +356,58 @@ def _merge_artifacts(metadata: Any, artifacts: list[str]) -> dict:
     return metadata
 
 
+def _auto_stamp_run_fields(metadata: dict, agent_state: Any) -> dict:
+    """Merge the load-bearing run fields (#2 resolved_model, #3 token_usage)
+    into *metadata* from the worker agent's own runtime state when the dispatch
+    path carried it. Missing *agent_state* → no-op (older/other invokers are
+    unaffected). Returns *metadata* mutated in place, for chaining with the
+    artifact merge that follows.
+
+    ``resolved_model`` is taken from the turn-start resolved-route snapshot
+    (may differ from the task's ``model_override`` when the profile fell back
+    mid-run — that difference is exactly what we want recorded).
+
+    ``token_usage`` is the per-run best-effort snapshot captured at
+    finalization time (input/output/total tokens, api_calls, cost_usd). It is
+    NOT a billing-grade audit record; it is enough to answer "what did this run
+    cost" and to drive matched-pairs model-routing analysis from recorded
+    history.
+    """
+    if not agent_state or not isinstance(agent_state, dict):
+        return metadata
+    updated = dict(metadata)
+
+    resolved = agent_state.get("resolved")
+    if isinstance(resolved, dict) and resolved:
+        updated["resolved_model"] = {
+            "model": str(resolved.get("model") or "").strip() or None,
+            "provider": str(resolved.get("provider") or "").strip() or None,
+            "base_url": str(resolved.get("base_url") or "").strip() or None,
+            "reasoning_effort": str(resolved.get("reasoning_effort") or "").strip() or None,
+            "is_fallback": bool(resolved.get("is_fallback", False)),
+        }
+        # Drop empty keys so the JSON stays readable.
+        updated["resolved_model"] = {
+            k: v for k, v in updated["resolved_model"].items() if v not in (None, "", False)
+        }
+        if not updated["resolved_model"]:
+            updated.pop("resolved_model", None)
+
+    usage = agent_state.get("usage")
+    if isinstance(usage, dict) and usage:
+        up = {k: v for k, v in usage.items()
+              if k in ("input_tokens", "output_tokens", "total_tokens", "api_calls", "cost_usd")
+              and isinstance(v, (int, float))}
+        if up:
+            updated["token_usage"] = up
+
+    # Merge back into the caller's dict (the artifact merge already owns this
+    # reference, so in-place mutation is the intended contract here).
+    metadata.clear()
+    metadata.update(updated)
+    return metadata
+
+
 def _require_text(args: dict, name: str, message: Optional[str] = None) -> Any:
     """``args[name]``; rejects when missing or blank."""
     value = args.get(name)
@@ -653,7 +705,24 @@ def _handle_list(args: dict, **kw) -> str:
 
 @_kanban_handler("kanban_complete")
 def _handle_complete(args: dict, **kw) -> str:
-    """Mark the current task done with a structured handoff."""
+    """Mark the current task done with a structured handoff.
+
+    Load-bearing run fields are auto-stamped onto ``metadata`` from the
+    worker agent's own runtime state when available, so the run row carries:
+
+    * ``resolved_model`` — the model + provider + effort the worker actually
+      used (claimed model may differ from resolved model when the profile
+      falls back mid-run).
+    * ``token_usage`` — input/output/total tokens, api_calls, and estimated
+      cost_usd the worker burned on this run.
+
+    ``quality_score`` (0-10, or ``"pass"``/``"fail"`` + optional grade) is
+    the VERIFIER's field: the verify pass sets it at finalization time. When
+    the worker self-evaluates it may also pre-populate it, but the convention
+    is that the verify pass owns it. Older runs are untouched — this is an
+    additive convention on the existing ``task_runs.metadata`` JSON blob; no
+    schema migration of live tables.
+    """
     tid = _worker_guard("kanban_complete", args)
     summary = _redact_opt(args.get("summary"))
     result = _redact_opt(args.get("result"))
@@ -669,6 +738,9 @@ def _handle_complete(args: dict, **kw) -> str:
     _check(summary or result, "provide at least one of: summary (preferred), result")
     _require_dict_metadata(metadata)
     metadata = _stamp_worker_session_metadata(tid, metadata)
+    # Auto-stamp the load-bearing run fields from the worker agent's own
+    # runtime state when the dispatch path carried it (agent-loop context).
+    _auto_stamp_run_fields(metadata, kw.get("agent_state"))
     with _board(args.get("board")) as (kb, conn):
         # Goal-mode pre-completion judge gate (Issue #38367). Prevent workers from bypassing the auxiliary
         # judge by calling kanban_complete before acceptance criteria are met. Only enforce when a judge is
