@@ -111,6 +111,11 @@ shared; the application that most recently registered it handles links.
 `hermes update` automatically detects new configuration options and prompts you to add them. If you skipped that prompt, you can manually run `hermes config check` to see missing options, then `hermes config migrate` to interactively add them.
 :::
 
+Before a Desktop update stops the backend, it must finish a verified `state.db`
+snapshot. Its time budget includes 30 seconds for startup plus two minutes per GiB
+of database and WAL data, capped at one hour. A snapshot failure still cancels the
+update before backend shutdown; large healthy databases receive time to finish.
+
 ### Passive update notices
 
 Pinned or noninteractive installations can disable passive CLI version and banner update checks:

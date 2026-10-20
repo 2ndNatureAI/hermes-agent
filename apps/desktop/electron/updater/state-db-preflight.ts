@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process'
+import { statSync } from 'node:fs'
+import path from 'node:path'
 
 import { hiddenWindowsChildOptions } from '../windows-child-options'
 
@@ -14,6 +16,17 @@ interface StateDbPreflight {
    * it exactly like the update check does (`readSourceUpdate`).
    */
   launcher?: string | null
+}
+
+function snapshotTimeout(home: string): number {
+  const bytes = ['state.db', 'state.db-wal'].reduce(
+    (total, name) => total + (statSync(path.join(home, name), { throwIfNoEntry: false })?.size ?? 0),
+    0
+  )
+
+  // Large healthy snapshots can exceed 30 seconds before their integrity check finishes.
+  // Allow two minutes per GiB of database/WAL, with a bounded startup allowance.
+  return Math.min(3_600_000, 30_000 + Math.ceil(bytes / 1024 ** 2) * 120)
 }
 
 // Synchronous by design: the caller must not stop the backend before the snapshot.
@@ -44,7 +57,7 @@ export function preflightStateDb({ python, script, home, log, launcher = null }:
         : args,
       hiddenWindowsChildOptions({
         encoding: 'utf8',
-        timeout: 30_000,
+        timeout: snapshotTimeout(home),
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsVerbatimArguments: viaCmd
       })
