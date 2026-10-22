@@ -495,6 +495,10 @@ its About page and backend health instead of Git commands inside the package.
 4. If you use the gateway: `hermes gateway status`
 5. `hermes pm status` — inspect dependency preparation and any failed steps.
 
+`hermes gateway ensure --json` and `hermes gateway status` leave unfinished
+source builds for a later update instead of running them before their gateway
+checks. A live update still fences gateway startup until it finishes.
+
 :::warning Dirty working tree after update
 If `git status --short` shows unexpected changes after `hermes update`, stop and inspect them before continuing. This usually means local modifications were reapplied on top of the updated code, or a dependency step refreshed lockfiles.
 :::

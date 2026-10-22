@@ -156,9 +156,9 @@ def collect_superseded_generations(project_root: Path) -> None:
 _METADATA_FLAGS = frozenset({"-h", "--help", "-V", "--version"})
 
 
-def _is_read_only_gateway_status(command: list[str]) -> bool:
-    """Whether *command* is the recovery diagnostic that must not run an update tail."""
-    return command[:2] == ["gateway", "status"]
+def _is_gateway_probe(command: list[str]) -> bool:
+    """Gateway diagnostics and bounded discovery cannot wait on source builds."""
+    return command[:1] == ["gateway"] and command[1:2] in (["status"], ["ensure"])
 
 
 def completion_pending_path(project_root: Path) -> Path:
@@ -367,10 +367,10 @@ def prepare_launch(project_root: Path, argv: list[str]) -> Path | None:
     command = command_argv(argv)
     if (command[:1] == ["pm"]
             or _METADATA_FLAGS & set(argv)
-            # This is the recovery path shown by the Desktop when a pending update has
-            # fenced the gateway. Completing that same tail first can take minutes and
-            # leaves the user without the fence diagnosis or a usable restart remedy.
-            or _is_read_only_gateway_status(command)
+            # Discovery has its own bounded deadline. Running the update tail first lets
+            # Desktop time out and kill a rebuild before it can contact a healthy owner.
+            # Leave the tail owed; ensure still respects a live updater's fence.
+            or _is_gateway_probe(command)
             or os.environ.get("HERMES_DISABLE_LAZY_INSTALLS", "").lower() in ("1", "true", "yes")
             or not (root / ".git").exists()
             or not (root / "pyproject.toml").is_file()):
