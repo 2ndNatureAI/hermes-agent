@@ -220,6 +220,7 @@ def _safe_copy_db(src: Path, dst: Path, *, timeout_seconds: float = 10.0) -> boo
                 os.close(secure_fd)
         # timeout=0.0 disables sqlite3's implicit busy wait so the progress callback owns the
         # full locked-source deadline instead of adding the default timeout before each callback.
+        conn, held_txn = _open_pinned_snapshot_source(src)
         backup_conn = sqlite3.connect(str(dst))
         busy_deadline = time.monotonic() + max(0.0, timeout_seconds)
 
@@ -246,7 +247,6 @@ def _safe_copy_db(src: Path, dst: Path, *, timeout_seconds: float = 10.0) -> boo
         # The open/pin sequence itself retries briefly across transient Windows
         # open conflicts (SQLITE_CANTOPEN at connect or first use); failures
         # beyond journal-mode probe/pin surface below unchanged.
-        conn, held_txn = _open_pinned_snapshot_source(src)
         try:
             conn.backup(
                 backup_conn, pages=256, progress=_check_backup_progress, sleep=0.1

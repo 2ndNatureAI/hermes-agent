@@ -1444,7 +1444,10 @@ class TestSafeCopyDb:
     def test_aborts_when_source_remains_busy_past_deadline(
         self, tmp_path, monkeypatch
     ):
+        from types import SimpleNamespace
+
         from hermes_cli import backup as backup_mod
+        from hermes_cli import backup_sqlite
 
         src = tmp_path / "locked.db"
         dst = tmp_path / "copy.db"
@@ -1454,6 +1457,13 @@ class TestSafeCopyDb:
         clock = iter((100.0, 100.5, 101.1))
 
         class FakeSourceConnection:
+            def execute(self, query):
+                assert query == "PRAGMA journal_mode"
+                return self
+
+            def fetchone(self):
+                return ("delete",)
+
             def backup(self, _destination, *, pages, progress, sleep):
                 assert pages > 0
                 assert sleep > 0
@@ -1483,7 +1493,7 @@ class TestSafeCopyDb:
             return next(connections)
 
         monkeypatch.setattr(backup_mod.sqlite3, "connect", fake_connect)
-        monkeypatch.setattr(backup_mod.time, "monotonic", lambda: next(clock))
+        monkeypatch.setattr(backup_sqlite, "time", SimpleNamespace(monotonic=lambda: next(clock)))
         monkeypatch.setattr(Path, "unlink", assert_closed_before_unlink)
 
         assert backup_mod._safe_copy_db(src, dst, timeout_seconds=1.0) is False
@@ -1799,7 +1809,7 @@ class TestQuickSnapshotProjectsKanban:
         monkeypatch.setattr(bk, "_safe_copy_db", _spy)
         snap_id = create_quick_snapshot(hermes_home=hermes_home)
         # The board db was copied via _safe_copy_db (not raw copy).
-        assert any(s.endswith("boards/work/kanban.db") for s in called["db"]), called["db"]
+        assert any(Path(s).parts[-3:] == ("boards", "work", "kanban.db") for s in called["db"]), called["db"]
         copy = hermes_home / "state-snapshots" / snap_id / "kanban" / "boards" / "work" / "kanban.db"
         rows = sqlite3.connect(str(copy)).execute("SELECT * FROM tasks").fetchall()
         assert rows == [("w1", "ship")]
