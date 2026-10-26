@@ -316,6 +316,14 @@ def _continue_text(st: _Trunc, _retry: TurnRetryState, assistant_message: Any) -
     _interim_content = getattr(assistant_message, "content", None)
     if not _interim_content and not st.is_stub:
         # Thinking-only truncation: continuing with thinking ON re-burns the budget.
+        # If a disable already went out on the previous attempt and the route STILL
+        # answered thinking-only, the disable is silently ignored (no 4xx, no
+        # FailoverReason — merge/SGLang-class relays; worker crash class
+        # "Or raise max_tokens for this model"): mark it so the wire builder stops
+        # sending a futile reasoning config and lets the route default stand.
+        if getattr(agent, "_continuation_disable_sent", False):
+            agent._continuation_disable_ignored = True
+        agent._continuation_disable_sent = True
         agent._ephemeral_reasoning_off = True
     if _interim_content:
         interim_msg = agent._build_assistant_message(assistant_message, st.finish_reason)
@@ -350,6 +358,8 @@ def _continue_text(st: _Trunc, _retry: TurnRetryState, assistant_message: Any) -
     )
     # The one-shot reasoning-off override must not leak into the next turn.
     agent._ephemeral_reasoning_off = False
+    agent._continuation_disable_sent = False
+    agent._continuation_disable_ignored = False
     agent._vprint(
         f"{agent.log_prefix}⚠️  Not continuing — each attempt would only grow the prompt."
         if filled is not None else

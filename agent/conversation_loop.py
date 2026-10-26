@@ -1705,6 +1705,11 @@ def _run_conversation_turn(
     agent._last_persistence_error_cause = None
     agent._compression_adoption_failed = False
     agent._ephemeral_reasoning_off = False
+    # The continuation-disable bookkeeping flags share the one-shot's lifecycle:
+    # a turn interrupted between arm and wire would otherwise leave a stale
+    # _continuation_disable_sent that false-trips the ignore guard next turn.
+    agent._continuation_disable_sent = False
+    agent._continuation_disable_ignored = False
     agent._auth_pool_refresh_counts = {}
     agent._last_turn_usage = None
 

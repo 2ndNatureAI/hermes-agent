@@ -577,6 +577,38 @@ def _check_web_dashboard_import(should_fix: bool, f: Finding) -> None:
     )
 
 
+def _check_gateway_elevation(should_fix: bool, f: Finding) -> None:
+    """The live gateway's token must not be elevated: a full-token gateway serves only elevated
+    clients, so every non-elevated one (Desktop, standard-console CLI) is refused
+    ``gateway_elevated`` — and from an elevated shell (most cron/doctor runners) EVERY probe looks
+    fine, so this check reads the gateway's own token instead of succeeding where clients fail.
+    Signals in priority order: a readable server token's ``TokenElevation`` (the same probe the
+    control-pipe identity check uses), else the pipe owner being BUILTIN\\Administrators.
+    Phase 1 names the defect and the fix; auto-repair lands with the restart path."""
+    if sys.platform != "win32":
+        return
+    from hermes_cli.gateway import find_gateway_pids
+    from hermes_dir_acl import process_is_elevated, process_elevation
+
+    _section("Windows Gateway Elevation")
+    pids = list(find_gateway_pids())
+    if not pids:
+        check_info("gateway not running (elevation check skipped by design)")
+        return
+    pid = pids[0]
+    elevated = process_elevation(pid)
+    if elevated is True:
+        detail = (f"PID {pid} runs with a full administrator token; non-elevated apps (Desktop, "
+                  "standard-console clients) cannot reach it")
+        check_fail("Gateway runs elevated", f"(pid {pid})")
+        f.issues.append(f"{detail}. Restart the gateway from a NON-elevated context — the "
+                        "Hermes_Gateway scheduled task (or `hermes gateway restart` in a standard "
+                        "console), never an administrator prompt")
+        return
+    check_ok("Gateway is not elevated", f"(pid {pid}, TokenElevation=False)" if elevated is False else
+             f"(pid {pid}, token probe unreadable from this client — inconclusive, not a defect trace)")
+
+
 @doctor_check()
 def _check_gateway_supervision(should_fix: bool, f: Finding) -> None:
     _check_gateway_service_linger(f.issues)

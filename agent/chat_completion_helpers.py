@@ -1301,6 +1301,15 @@ def _reasoning_config_for_wire(agent):
     """
     cfg = agent.reasoning_config
     ephemeral_off = _consume_ephemeral_reasoning_off(agent)
+    if getattr(agent, "_continuation_disable_ignored", False) and ephemeral_off:
+        # The route ignores the continuation reasoning-disable (answers thinking-only
+        # every time, no 4xx — merge/SGLang-class relays). Serving it once more only
+        # re-burns the output budget; send NO reasoning config (route default) instead
+        # and clear the stale one-shot arm. Reset for the next turn/attempt streak,
+        # mirroring _ephemeral_reasoning_off's per-turn reset in conversation_loop.
+        agent._continuation_disable_ignored = False
+        agent._wire_reasoning_config = None
+        return None
     if getattr(agent, "_reasoning_effort_rejected", False):
         # The route rejected the configured reasoning LEVEL itself (#100536: ``reasoning.effort:
         # max`` on an enabled config). Omit the reasoning fields for the rest of the session —
