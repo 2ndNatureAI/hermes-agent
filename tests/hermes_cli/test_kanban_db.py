@@ -468,6 +468,94 @@ def test_respawn_guard_defers_rate_limited_within_cooldown(
         monkeypatch.setattr(_kb.time, "time", lambda: now + 400)
         assert kbd.check_respawn_guard(conn, tid) is None
 
+def test_respawn_guard_same_second_tie_newer_run_id_wins(
+    kanban_home, monkeypatch,
+):
+    """``ORDER BY ended_at DESC`` had no tie-break: ``ended_at`` is
+    second-resolution and SQLite returns the lower id first on an equal key,
+    so an OLDER ``rate_limited`` run shadowed a NEWER ``completed`` run that
+    ended in the SAME second — the guard reported ``rate_limit_cooldown``
+    instead of letting the superseding outcome's paths take over. ``id DESC``
+    makes the newer run win ties, matching the documented supersession
+    semantics ("if a newer crash/completion superseded the rate-limit run,
+    this guard no longer applies")."""
+    monkeypatch.setenv("HERMES_KANBAN_RATE_LIMIT_COOLDOWN_SECONDS", "300")
+    now = 5_000_000
+
+    with kbc.connect() as conn:
+        # Older rate_limited run, then a newer completed run, same second.
+        tid = kb.create_task(conn, title="tie-rl-then-done", assignee="a")
+        kb.claim_task(conn, tid)
+        rl_run = kb.get_task(conn, tid).current_run_id
+        conn.execute(
+            "UPDATE task_runs SET outcome='rate_limited', status='rate_limited', "
+            "ended_at=? WHERE id=?",
+            (now, rl_run),
+        )
+        conn.execute(
+            "UPDATE tasks SET status='ready', current_run_id=NULL, "
+            "claim_lock=NULL, claim_expires=NULL, worker_pid=NULL, "
+            "last_failure_error=? WHERE id=?",
+            ("pid 1 exited rate-limited (quota wall) — requeued", tid),
+        )
+        kb.claim_task(conn, tid)
+        done_run = kb.get_task(conn, tid).current_run_id
+        conn.execute(
+            "UPDATE task_runs SET outcome='completed', status='completed', "
+            "ended_at=? WHERE id=?",
+            (now, done_run),
+        )
+        conn.execute(
+            "UPDATE tasks SET status='ready', current_run_id=NULL, "
+            "claim_lock=NULL, claim_expires=NULL, worker_pid=NULL WHERE id=?",
+            (tid,),
+        )
+        conn.commit()
+        assert rl_run < done_run
+
+        monkeypatch.setattr(kbd.time, "time", lambda: now + 100)
+        # The completed run supersedes the rate-limit run despite the equal
+        # ended_at. With the supersession precedence (#119070) a completed run
+        # clears the stamped quota text from blocker_auth's evidence; the
+        # ready-lane completed-run path then reports ``recent_success`` —
+        # the important part is that the stale cooldown is gone.
+        guard = kbd.check_respawn_guard(conn, tid)
+        assert guard != "rate_limit_cooldown"
+        assert guard == "recent_success"
+
+        # Inverse tie: completed run OLDER (lower id), rate_limited NEWER —
+        # the cooldown must still apply; the tie-break must not over-correct.
+        tid2 = kb.create_task(conn, title="tie-done-then-rl", assignee="a")
+        kb.claim_task(conn, tid2)
+        done2 = kb.get_task(conn, tid2).current_run_id
+        conn.execute(
+            "UPDATE task_runs SET outcome='completed', status='completed', "
+            "ended_at=? WHERE id=?",
+            (now, done2),
+        )
+        conn.execute(
+            "UPDATE tasks SET status='ready', current_run_id=NULL, "
+            "claim_lock=NULL, claim_expires=NULL, worker_pid=NULL WHERE id=?",
+            (tid2,),
+        )
+        kb.claim_task(conn, tid2)
+        rl2 = kb.get_task(conn, tid2).current_run_id
+        conn.execute(
+            "UPDATE task_runs SET outcome='rate_limited', status='rate_limited', "
+            "ended_at=? WHERE id=?",
+            (now, rl2),
+        )
+        conn.execute(
+            "UPDATE tasks SET status='ready', current_run_id=NULL, "
+            "claim_lock=NULL, claim_expires=NULL, worker_pid=NULL, "
+            "last_failure_error=? WHERE id=?",
+            ("pid 1 exited rate-limited (quota wall) — requeued", tid2),
+        )
+        conn.commit()
+        assert done2 < rl2
+        assert kbd.check_respawn_guard(conn, tid2) == "rate_limit_cooldown"
+
+
 
 @pytest.mark.parametrize(
     "error_text, expected",
@@ -600,6 +688,174 @@ def test_infrastructure_spawn_refusal_never_charges_the_card(
         assert conn.execute(
             "SELECT consecutive_failures FROM tasks WHERE id = ?", (tid,),
         ).fetchone()[0] == 1
+
+
+def test_respawn_guard_stale_rate_limit_stamp_superseded_by_review_handoff(
+    kanban_home, monkeypatch,
+):
+    """A ``review`` card whose stale quota-flavored ``last_failure_error`` outlived its
+    ``rate_limited`` run (#119070): the requeue path stamps the error without touching
+    ``consecutive_failures``, but a newer ``review_requested`` run supersedes that run and
+    stamps nothing — so the stamp is not evidence anymore and must not keep returning
+    ``blocker_auth`` forever. The reviewer must be spawnable on the review lane."""
+    monkeypatch.setenv("HERMES_KANBAN_RATE_LIMIT_COOLDOWN_SECONDS", "0")
+    now = 5_000_000
+
+    with kbc.connect() as conn:
+        tid = kb.create_task(conn, title="rl stamp then review handoff", assignee="a")
+        kb.claim_task(conn, tid)
+        rl_run = kb.get_task(conn, tid).current_run_id
+        conn.execute(
+            "UPDATE task_runs SET outcome='rate_limited', status='rate_limited', "
+            "ended_at=? WHERE id=?",
+            (now, rl_run),
+        )
+        conn.execute(
+            "UPDATE tasks SET status='ready', current_run_id=NULL, "
+            "claim_lock=NULL, claim_expires=NULL, worker_pid=NULL, "
+            "last_failure_error=? WHERE id=?",
+            ("pid 1 exited rate-limited (quota wall) - requeued without counting a failure", tid),
+        )
+        # The retry handoff: an older rate_limited run superseded by a newer
+        # review_requested run, card now parked in 'review' with the stale stamp.
+        kb.claim_task(conn, tid)
+        handoff_run = kb.get_task(conn, tid).current_run_id
+        conn.execute(
+            "UPDATE task_runs SET outcome='review_requested', status='review', "
+            "ended_at=? WHERE id=?",
+            (now + 5, handoff_run),
+        )
+        conn.execute(
+            "UPDATE tasks SET status='review', current_run_id=NULL, "
+            "claim_lock=NULL, claim_expires=NULL, worker_pid=NULL WHERE id=?",
+            (tid,),
+        )
+        conn.commit()
+        # Precondition: the stamp is genuinely stale — paired with an outcome the
+        # review lane no longer reports as the latest one.
+        assert kb.get_task(conn, tid).last_failure_error
+        assert kbd.check_respawn_guard(conn, tid, lane="review") is None
+        assert kbd.check_respawn_guard(conn, tid, lane="ready") is None
+
+        # Ready-lane control: a REAL failure outcome after the handoff replaces
+        # the guard's input — spawn_failed with quota text blocks again.
+        kb.claim_review_task(conn, tid)
+        crash_run = kb.get_task(conn, tid).current_run_id
+        conn.execute(
+            "UPDATE task_runs SET outcome='spawn_failed', status='failed', "
+            "ended_at=? WHERE id=?",
+            (now + 10, crash_run),
+        )
+        conn.execute(
+            "UPDATE tasks SET status='ready', current_run_id=NULL, "
+            "claim_lock=NULL, claim_expires=NULL, worker_pid=NULL, "
+            "last_failure_error=? WHERE id=?",
+            ("spawn refused: provider authentication failed", tid),
+        )
+        conn.commit()
+        assert kbd.check_respawn_guard(conn, tid) == "blocker_auth"
+
+
+def test_request_review_clears_stale_rate_limit_stamp(kanban_home, monkeypatch):
+    """``request_review`` is a successful handoff to the review lane: the failure
+    text loses its run at that transition, so the review card must not carry a
+    stale quota stamp the role-shifted assignee never wrote."""
+    with kbc.connect() as conn:
+        tid = kb.create_task(conn, title="stamp cleared at handoff", assignee="a")
+        kb.claim_task(conn, tid)
+        run_id = kb.get_task(conn, tid).current_run_id
+        conn.execute(
+            "UPDATE tasks SET last_failure_error=? WHERE id=?",
+            ("429 quota wall — requeued", tid),
+        )
+        conn.commit()
+        assert kb.request_review(conn, tid, summary="ready for review", expected_run_id=run_id)
+
+        task = kb.get_task(conn, tid)
+        assert task.status == "review"
+        assert task.last_failure_error is None
+        latest = kb.latest_run(conn, tid)
+        assert latest.outcome == "review_requested"
+
+
+def test_request_review_clears_stale_rate_limit_stamp_e2e(
+    kanban_home, monkeypatch, all_assignees_spawnable,
+):
+    """File-level E2E through the REAL dispatcher: a review card carrying a stale
+    quota stamp (superseded by a review_requested run) is claimable this tick.
+
+    The E2E harness (tests/e2e/core/kanban/) covers the same fan-out (real
+    429 worker exit -> real review handoff -> a reviewer spawns and approves)
+    against a fake provider and also pins the no-blocker_auth verdict; spawns
+    happen only on Linux there, so this is the Windows-runnable formulation.
+    """
+    monkeypatch.setenv("HERMES_KANBAN_RATE_LIMIT_COOLDOWN_SECONDS", "0")
+    now = 5_000_000
+
+    with kbc.connect() as conn:
+        tid = kb.create_task(conn, title="rl stamp then review handoff", assignee="a")
+        kb.claim_task(conn, tid)
+        rl_run = kb.get_task(conn, tid).current_run_id
+        conn.execute(
+            "UPDATE task_runs SET outcome='rate_limited', status='rate_limited', "
+            "ended_at=? WHERE id=?",
+            (now, rl_run),
+        )
+        conn.execute(
+            "UPDATE tasks SET status='ready', current_run_id=NULL, "
+            "claim_lock=NULL, claim_expires=NULL, worker_pid=NULL, "
+            "last_failure_error=? WHERE id=?",
+            ("pid 1 exited rate-limited (quota wall) - requeued", tid),
+        )
+        kb.claim_task(conn, tid)
+        handoff_run = kb.get_task(conn, tid).current_run_id
+        conn.execute(
+            "UPDATE task_runs SET outcome='review_requested', status='review', "
+            "ended_at=? WHERE id=?",
+            (now + 5, handoff_run),
+        )
+        conn.execute(
+            "UPDATE tasks SET status='review', current_run_id=NULL, "
+            "claim_lock=NULL, claim_expires=NULL, worker_pid=NULL WHERE id=?",
+            (tid,),
+        )
+        conn.commit()
+
+        spawned: list[str] = []
+
+        def spawn_ok(task, workspace, board=None):
+            spawned.append(task.id)
+            return 4242
+
+        # One dispatch pass: review lane spawns the card despite the stale stamp.
+        res = kbd.dispatch_once(conn, spawn_fn=spawn_ok,
+                                max_in_progress_per_profile=None, max_in_progress=None)
+        assert spawned == [tid], f"review card not spawned: {res.respawn_guarded}"
+
+        # Control: the un-superseded stamp still parks. Same 429 stamp, latest
+        # run = timed_out (a real failure outcome keeps the stamp as evidence).
+        # Two outcomes cannot serve here: rate_limited (cooldown disabled by
+        # this test's probe -> the cooldown branch intentionally respawns) and
+        # crashed (the #117097 carve-out: its error text is context, never a
+        # park). Proving the review handoff's supersession unlocked card #1.
+        tid2 = kb.create_task(conn, title="rl stamp stays", assignee="a")
+        kb.claim_task(conn, tid2)
+        rl2 = kb.get_task(conn, tid2).current_run_id
+        conn.execute(
+            "UPDATE task_runs SET outcome='timed_out', status='timed_out', "
+            "ended_at=? WHERE id=?",
+            (now, rl2),
+        )
+        conn.execute(
+            "UPDATE tasks SET status='ready', current_run_id=NULL, "
+            "claim_lock=NULL, claim_expires=NULL, worker_pid=NULL, "
+            "last_failure_error=? WHERE id=?",
+            ("pid 1 exited rate-limited (quota wall) - requeued", tid2),
+        )
+        conn.commit()
+        spawned.clear()
+        kbd.dispatch_once(conn, spawn_fn=spawn_ok)
+        assert spawned == [], "stamped card must stay parked"
 
 
 
