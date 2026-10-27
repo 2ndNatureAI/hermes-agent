@@ -68,16 +68,7 @@ vi.mock(import('@/store/terminal-backend-warning'), () => ({
   warnIfTerminalBackendUnavailable: vi.fn(async () => false)
 }))
 
-// End-to-end-ish repro of the "remote VPS → stuck on CONNECTING, no Settings"
-// bug that drives the REAL useGatewayBoot hook + REAL HermesGateway through a
-// fake WebSocket we fully control. No Docker / no real port: from the desktop's
-// point of view a "remote VPS" is just a WebSocket that opens once and later
-// refuses to reopen, so that is exactly (and only) what we fake.
-//
-// The previous test (gateway-connecting-overlay.test.tsx) hand-set the stores
-// and asserted the overlays; this one proves the HOOK actually PRODUCES that
-// stuck store combo — closing the "inferred by reading code" gap on the
-// post-boot reconnect loop.
+// Drive the real boot hook and gateway through a controlled WebSocket.
 
 let connectionApplied: null | (() => void) = null
 let powerResume: null | (() => void) = null
@@ -363,6 +354,21 @@ async function advanceBackoff() {
     await vi.advanceTimersByTimeAsync(15_000)
   })
 }
+
+it('local boot waits for a cold native ticket helper beyond the reconnect deadline', async () => {
+  const desktop = fakeDesktop()
+  const ticket = deferred<string>()
+  desktop.getConnection.mockResolvedValue({ ...primaryConn, mode: 'local', authMode: 'native' } as unknown as typeof primaryConn)
+  desktop.getGatewayWsUrl.mockImplementation(() => ticket.promise)
+  ;(window as { hermesDesktop?: unknown }).hermesDesktop = desktop
+  render(<Harness />)
+  await flushAsync()
+  await act(async () => { await vi.advanceTimersByTimeAsync(25_000) })
+  expect($desktopBoot.get().error).toBeNull()
+  ticket.resolve('ws://127.0.0.1:9191/api/ws?ticket=fresh')
+  await flushAsync()
+  expect($gatewayState.get()).toBe('open')
+})
 
 describe('default-route profile adoption', () => {
   it.each(['peer=1', 'win=secondary&watch=1'])(
@@ -1536,13 +1542,7 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
   })
 
   it('a getConnection() that hangs on reconnect does not permanently latch the backoff loop (#93454)', async () => {
-    // Repro: a remote gateway drops, the backoff loop kicks off a reconnect,
-    // and the IPC round-trip into main (desktop.getConnection) never settles
-    // — e.g. a wedged revalidation after a liveness-probe trip, even though
-    // the backend itself answers fine. Without an internal timeout on that
-    // await, `reconnecting` never clears and every later
-    // scheduleReconnect()/attemptReconnect() early-returns forever, so the UI
-    // stays stuck until the app is restarted.
+    // A hung remote IPC must release the reconnect guard so backoff can retry.
     const desktop = fakeDesktop()
     const originalGetConnection = desktop.getConnection
     let callCount = 0

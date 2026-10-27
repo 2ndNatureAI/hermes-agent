@@ -1466,10 +1466,7 @@ export function useGatewayBoot({
         // A profile-pinned helper window (the HUD) dials its target profile's
         // backend directly — ensureBackend spawns/reuses it from the pool.
         // Full peers use the source/profile Electron pinned before loading.
-        // Bounded like the reconnect path (#93454): a wedged main-process
-        // round-trip must not hang "Starting Hermes…" forever. Initial boot
-        // rides out a full backend cold spawn, so it gets the shared 45s
-        // backend-boot budget, not the 20s reconnect budget.
+        // Initial boot includes the native runtime's complete cold-start chain.
         const conn = await withTimeout(
           getWindowBackend(true),
           BACKEND_BOOT_WAIT_TIMEOUT_MS,
@@ -1514,12 +1511,12 @@ export function useGatewayBoot({
         // Mint a fresh WS URL right before connecting. For OAuth gateways the
         // ticket is single-use with a short TTL, so the ticket baked into
         // conn.wsUrl is stale; resolveGatewayWsUrl() re-mints it rather than
-        // connecting with a dead ticket. Auth rejection asks for sign-in. This
-        // await is bounded like the reconnect path (#93454) so a wedged mint
-        // reaches the recovery affordance instead of hanging "Starting Hermes…".
+        // connecting with a dead ticket. Auth rejection asks for sign-in.
+        // Native minting also resolves the installed Python runtime and can re-ensure
+        // an owner. It needs the cold-start budget; remote minting keeps its short bound.
         const wsUrl = await withTimeout(
           resolveDesktopGatewayWsUrl(desktop, conn),
-          RECONNECT_ATTEMPT_TIMEOUT_MS,
+          conn.authMode === 'native' ? BACKEND_BOOT_WAIT_TIMEOUT_MS : RECONNECT_ATTEMPT_TIMEOUT_MS,
           'Timed out minting the gateway WebSocket URL'
         )
 
@@ -1544,15 +1541,14 @@ export function useGatewayBoot({
           // retry the one lost race ended the boot in "Could not connect to
           // Hermes gateway". The first attempt reuses the URL minted at the
           // boot boundary above — the mint count stays observable (#93454) —
-          // while later attempts re-mint; local token URLs are long-lived, so
-          // the re-mint is a cheap no-op.
+          // while later attempts re-mint native tickets against the same owner.
           await connectInitialGateway({
             connect: async (attemptWsUrl?: string) => {
               const url =
                 attemptWsUrl ??
                 (await withTimeout(
                   resolveDesktopGatewayWsUrl(desktop, conn),
-                  RECONNECT_ATTEMPT_TIMEOUT_MS,
+                  conn.authMode === 'native' ? BACKEND_BOOT_WAIT_TIMEOUT_MS : RECONNECT_ATTEMPT_TIMEOUT_MS,
                   'Timed out minting the gateway WebSocket URL'
                 ))
 
