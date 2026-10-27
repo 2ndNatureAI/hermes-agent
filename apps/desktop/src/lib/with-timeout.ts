@@ -46,15 +46,17 @@ export function isTimeoutError(error: unknown): error is TimeoutError {
 /** Settle with `promise`, or reject with a TimeoutError after `ms`.
  * `onTimeout` runs synchronously before the rejection is published so callers
  * can revoke ownership of work that would otherwise keep running unowned. If
- * that callback throws, its error becomes this promise's rejection. */
+ * that callback throws, its error becomes this promise's rejection.
+ * An explicit `pauseWhile` hold pauses the budget without cancelling the work. */
 export function withTimeout<T>(
   promise: Promise<T>,
   ms: number,
   message: string,
-  onTimeout?: (error: TimeoutError) => void
+  onTimeout?: (error: TimeoutError) => void,
+  pauseWhile?: () => boolean
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
+    const expire = () => {
       const error = new TimeoutError(message)
 
       try {
@@ -66,7 +68,30 @@ export function withTimeout<T>(
       }
 
       reject(error)
-    }, ms)
+    }
+
+    // A live updater owns its own wait policy. Charge only backend startup time,
+    // then resume the remaining budget when the explicit update hold clears.
+    let remaining = ms
+    let checkedAt = performance.now()
+    let paused = Boolean(pauseWhile?.())
+
+    const tick = () => {
+      const now = performance.now()
+      const nextPaused = Boolean(pauseWhile?.())
+
+      if (!paused && !nextPaused) { remaining -= now - checkedAt }
+      checkedAt = now
+      paused = nextPaused
+
+      if (remaining <= 0) { expire();
+
+ return }
+
+      timer = setTimeout(tick, Math.min(1000, remaining))
+    }
+
+    let timer = setTimeout(pauseWhile ? tick : expire, pauseWhile ? Math.min(1000, ms) : ms)
 
     Promise.resolve(promise).then(
       value => {

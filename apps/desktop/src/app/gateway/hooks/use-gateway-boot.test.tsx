@@ -355,16 +355,23 @@ async function advanceBackoff() {
   })
 }
 
-it('local boot waits for a cold native ticket helper beyond the reconnect deadline', async () => {
+it.each(['mint', 'update'])('local boot waits for a cold native ticket helper or update hold: %s', async delay => {
   const desktop = fakeDesktop()
   const ticket = deferred<string>()
-  desktop.getConnection.mockResolvedValue({ ...primaryConn, mode: 'local', authMode: 'native' } as unknown as typeof primaryConn)
+  const descriptor = deferred<typeof primaryConn>()
+  const native = { ...primaryConn, mode: 'local', authMode: 'native' } as unknown as typeof primaryConn
+  desktop.getConnection.mockImplementation(() => delay === 'update' ? descriptor.promise : Promise.resolve(native))
   desktop.getGatewayWsUrl.mockImplementation(() => ticket.promise)
   ;(window as { hermesDesktop?: unknown }).hermesDesktop = desktop
   render(<Harness />)
   await flushAsync()
-  await act(async () => { await vi.advanceTimersByTimeAsync(25_000) })
+
+  if (delay === 'update') { desktop.emitBootProgress({ phase: 'backend.update-wait', running: true, message: 'Updating', progress: 12 }) }
+  await act(async () => { await vi.advanceTimersByTimeAsync(delay === 'update' ? 300_000 : 25_000) })
   expect($desktopBoot.get().error).toBeNull()
+  desktop.emitBootProgress({ phase: 'backend.resolve', running: true, message: 'Connecting', progress: 95 })
+  descriptor.resolve(native)
+  await flushAsync()
   ticket.resolve('ws://127.0.0.1:9191/api/ws?ticket=fresh')
   await flushAsync()
   expect($gatewayState.get()).toBe('open')
@@ -1567,10 +1574,6 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     expect(callCount).toBe(2)
     expect($gatewayState.get()).not.toBe('open')
 
-    // Advance past the internal reconnect-attempt timeout (20s) — the stalled
-    // await must reject so the `reconnecting` guard clears and the backoff
-    // loop schedules another attempt, instead of latching forever on the
-    // still-pending first hang.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(20_000)
     })
@@ -1580,9 +1583,6 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
   })
 
   it('a revalidateConnection() that hangs on reconnect does not permanently latch the backoff loop (#93454)', async () => {
-    // Same failure mode as the getConnection() repro above, but for the OTHER
-    // unbounded IPC await in the same try block: a wedged revalidation after a
-    // liveness-probe trip (the PR's own named trigger) must also unlatch.
     const desktop = fakeDesktop()
     let revalidateCallCount = 0
 
@@ -1609,10 +1609,6 @@ describe('useGatewayBoot remote reconnect loop (real hook, fake socket)', () => 
     // getConnection() at all.
     expect(desktop.getConnection.mock.calls.length).toBe(callsBeforeDrop)
 
-    // Advance past the internal reconnect-attempt timeout (20s) — the stalled
-    // revalidate await must reject (swallowed, as it always was for a genuine
-    // rejection) so execution proceeds to getConnection() and the socket
-    // reopens, instead of latching on the still-pending revalidate forever.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(20_000)
     })

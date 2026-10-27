@@ -1470,7 +1470,8 @@ export function useGatewayBoot({
         const conn = await withTimeout(
           getWindowBackend(true),
           BACKEND_BOOT_WAIT_TIMEOUT_MS,
-          'Timed out connecting to Hermes backend'
+          'Timed out connecting to Hermes backend', undefined,
+          () => $desktopBoot.get().phase === 'backend.update-wait' || Boolean($desktopBoot.get().updateHold)
         )
 
         if (cancelled) {
@@ -1517,7 +1518,8 @@ export function useGatewayBoot({
         const wsUrl = await withTimeout(
           resolveDesktopGatewayWsUrl(desktop, conn),
           conn.authMode === 'native' ? BACKEND_BOOT_WAIT_TIMEOUT_MS : RECONNECT_ATTEMPT_TIMEOUT_MS,
-          'Timed out minting the gateway WebSocket URL'
+          'Timed out minting the gateway WebSocket URL', undefined,
+          () => $desktopBoot.get().phase === 'backend.update-wait' || Boolean($desktopBoot.get().updateHold)
         )
 
         // Only a valid WebSocket dial against a remote descriptor counts as a
@@ -1534,14 +1536,8 @@ export function useGatewayBoot({
           // getConnection() against a possibly-rebuilt tunnel.
           await gateway.connect(wsUrl)
         } else {
-          // LOCAL retries the dial across backend cold-start (#49645): main's
-          // readiness probe already passed, but a freshly spawned backend can
-          // still stall its event loop for seconds on the first WS handshake —
-          // a local boot failure is latched non-retryable, so without this
-          // retry the one lost race ended the boot in "Could not connect to
-          // Hermes gateway". The first attempt reuses the URL minted at the
-          // boot boundary above — the mint count stays observable (#93454) —
-          // while later attempts re-mint native tickets against the same owner.
+          // Retry a local cold-start handshake stall, preserving the first minted
+          // URL; later attempts mint fresh tickets against the same owner.
           await connectInitialGateway({
             connect: async (attemptWsUrl?: string) => {
               const url =
@@ -1549,7 +1545,8 @@ export function useGatewayBoot({
                 (await withTimeout(
                   resolveDesktopGatewayWsUrl(desktop, conn),
                   conn.authMode === 'native' ? BACKEND_BOOT_WAIT_TIMEOUT_MS : RECONNECT_ATTEMPT_TIMEOUT_MS,
-                  'Timed out minting the gateway WebSocket URL'
+                  'Timed out minting the gateway WebSocket URL', undefined,
+                  () => $desktopBoot.get().phase === 'backend.update-wait' || Boolean($desktopBoot.get().updateHold)
                 ))
 
               await gateway.connect(url)
