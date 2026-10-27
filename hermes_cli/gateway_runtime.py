@@ -14,10 +14,10 @@ if TYPE_CHECKING:
     from gateway.runtime_contract import RuntimeState
 
 # Total startup deadline a client waits for a cold daemon. A cold boot imports the whole
-# runtime, seeds the skill library and warms the turn machinery: ~10-20 s on a loaded
-# 32-core CI runner with dozens of sibling boots, where 30 s tipped every attaching client
-# of a parallel e2e shard into `starting: deadline`. A minute is still a verdict, not a hang.
-DEFAULT_ENSURE_TIMEOUT = 60.0
+# runtime, discovers integrations and recovers every served profile. Large Windows
+# multi-profile installs can need over two minutes; a one-minute client reports failure
+# while the same owner is still making progress. Explicit caller deadlines still win.
+DEFAULT_ENSURE_TIMEOUT = 180.0
 
 
 @dataclass(frozen=True)

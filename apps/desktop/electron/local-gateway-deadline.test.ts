@@ -64,7 +64,7 @@ test('a stale-owner restart client that times out but obeys SIGTERM is logged an
   expect(logs).toEqual(['gateway restart exited 7: hermes gateway restart timed out'])
 })
 
-// `hermes gateway ensure` owns a 60 s startup deadline (hermes_cli/gateway_runtime.py
+// `hermes gateway ensure` owns a 180 s startup deadline (hermes_cli/gateway_runtime.py
 // DEFAULT_ENSURE_TIMEOUT) and always answers with a protocol verdict by then. Killing the client
 // earlier turned a slow-but-valid cold start into "produced no result … Update Hermes".
 test('the default ensure client outlives the protocol deadline and reads a late verdict', async () => {
@@ -77,7 +77,7 @@ test('the default ensure client outlives the protocol deadline and reads a late 
   vi.doMock('node:child_process', () => ({ spawn: () => child }))
   const { runGatewayEnsure } = await import('./local-gateway')
   const result = runGatewayEnsure({ command: 'owned-client', args: [], env: {}, shell: false }, '.', 'profile', {})
-  await vi.advanceTimersByTimeAsync(60_000)
+  await vi.advanceTimersByTimeAsync(180_000)
   child.stdout.emit('data', Buffer.from('{"state":"starting","reason_code":"deadline"}'))
   child.emit('close', 5)
   await expect(result).resolves.toEqual({ code: 5, stdout: '{"state":"starting","reason_code":"deadline"}', stderr: '' })

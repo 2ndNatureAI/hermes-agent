@@ -356,11 +356,12 @@ Use `hermes gateway run` instead of `hermes gateway start` — WSL's systemd sup
 
 ### Local runtime discovery and startup
 
-`hermes gateway ensure [--json] [--timeout 60]` discovers or starts the active profile's
+`hermes gateway ensure [--json] [--timeout 180]` discovers or starts the active profile's
 session runtime and prints one JSON object (`state`, `reason_code`, and an `endpoint` only
 once authenticated discovery reports compatible readiness; never tickets or credentials).
-It waits for an existing or starting owner instead of replacing it and never installs a
-service. Exit `0` means ready; any other code is a refusal or a deadline, never permission
+The default three-minute deadline accommodates cold multi-profile startup; an explicit
+`--timeout` overrides it. It waits for an existing or starting owner instead of replacing it
+and never installs a service. Exit `0` means ready; any other code is a refusal or a deadline, never permission
 to start a replacement. Service identity checks, the home-permission policy behind
 `unsafe_control_permissions`, and every exit code:
 [Gateway internals: `hermes gateway ensure`](../developer-guide/gateway-internals.md#hermes-gateway-ensure).
