@@ -1027,6 +1027,16 @@ def _canonical_assignee(assignee: Optional[str]) -> Optional[str]:
     return normalize_profile_name(assignee)
 
 
+def _warn_assignee(assignee: Optional[str], location: str) -> None:
+    """Warn-only assignee resolution check (hermes_cli.profiles_assignee_guard)."""
+    try:
+        from hermes_cli.profiles_assignee_guard import warn_unknown_assignee
+
+        warn_unknown_assignee(assignee, location=location)
+    except Exception:  # guard must never break a board write seam
+        pass
+
+
 def _resolve_project_link(
     conn: sqlite3.Connection, project_id: Optional[str], project_source_task_id: Optional[str],
     workspace_kind: str, workspace_path: Optional[str],
@@ -1192,6 +1202,7 @@ def create_task(
     assignee = _canonical_assignee(assignee)
     if not title or not title.strip():
         raise ValueError("title is required")
+    _warn_assignee(assignee, "create")
     if initial_status not in VALID_INITIAL_STATUSES:
         raise ValueError(f"initial_status must be one of {sorted(VALID_INITIAL_STATUSES)}")
     # A project-scoped board anchors every new task to its project's repo
@@ -1513,6 +1524,8 @@ def list_tasks(
 def assign_task(conn: sqlite3.Connection, task_id: str, profile: Optional[str]) -> bool:
     """Assign/reassign; raises RuntimeError while the task is running under a claim."""
     profile = _canonical_assignee(profile)
+    if profile:
+        _warn_assignee(profile, "reassign")
     with write_txn(conn):
         row = conn.execute(
             "SELECT status, claim_lock, assignee FROM tasks WHERE id = ?", (task_id,)

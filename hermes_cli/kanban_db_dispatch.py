@@ -8,6 +8,7 @@ late-bound via ``_kb`` (import-cycle breaking) so monkeypatching
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import re
 import signal
@@ -2082,6 +2083,16 @@ def _dispatch_lane_task(
     profile_exists = _profile_exists_fn()
     if profile_exists is not None and not profile_exists(assignee):
         result.skipped_nonspawnable.append(task_id)
+        # Per-tick observable log line (t_89658341): a ready card skipped for an
+        # unresolvable assignee must be visible in the dispatcher stream, not
+        # only in the one-shot DB event below. Control-plane assignees are
+        # excluded: they legitimately pull via claim_task and must stay quiet.
+        from hermes_cli.profiles_assignee_guard import CONTROL_PLANE_ASSIGNEES
+
+        if assignee not in CONTROL_PLANE_ASSIGNEES:
+            logging.getLogger("hermes_cli.kanban_db_dispatch").warning(
+                "kanban: task %s skipped (assignee %r does not resolve to a "
+                "spawnable profile; will not spawn)", task_id, assignee)
         # Per-task diagnostic so ``show``/``tail`` name the missing profile instead of leaving
         # the card in ``ready`` with zero board evidence (#122422). Unlike a respawn guard the
         # condition never expires on its own, so write it once: a repeat only when something
