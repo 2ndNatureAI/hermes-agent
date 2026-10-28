@@ -32,7 +32,7 @@ _CORRUPT_DB_MARKERS = ("file is not a database", "database disk image is malform
 
 @dataclass
 class _DispatcherSettings:
-    """``kanban.*`` dispatch settings, read once at boot (restart to apply)."""
+    """Boot settings; concurrency limits are refreshed before each board tick."""
 
     interval: float
     max_spawn: Any
@@ -42,6 +42,26 @@ class _DispatcherSettings:
     reconcile_orphans: bool
     default_assignee: Optional[str]
     max_in_progress_per_profile: Optional[int]
+
+
+def _live_dispatch_limits() -> dict[str, Optional[int]]:
+    """Read admission limits fail-closed, without restarting or touching workers."""
+    from hermes_cli.config_effective import load_user_config_effective
+
+    cfg = load_user_config_effective(fail_closed=True).get("kanban", {})
+    limits: dict[str, Optional[int]] = {}
+    for key in ("max_spawn", "max_in_progress", "max_in_progress_per_profile"):
+        raw = cfg.get(key)
+        if raw is None:
+            limits[key] = None
+            continue
+        # A malformed safety limit must not restore the old boot-time headroom.
+        value = int(raw)
+        if isinstance(raw, bool) or value < (0 if key == "max_spawn" else 1):
+            raise ValueError(f"invalid kanban.{key}: {raw!r}")
+        limits[key] = value
+    limits["max_in_progress"] = _kbd().resolve_max_in_progress(limits["max_in_progress"])
+    return limits
 
 
 def _resolve_dispatcher_settings(kanban_cfg: dict, kb: Any) -> _DispatcherSettings:
@@ -63,6 +83,8 @@ def _resolve_dispatcher_settings(kanban_cfg: dict, kb: Any) -> _DispatcherSettin
     # fan-out swap-thrashes small hosts), or None where total memory can't be read.
     max_in_progress = _positive_int_setting(kanban_cfg, "max_in_progress")
     effective_max_in_progress = _kbd().resolve_max_in_progress(max_in_progress)
+    logger.info("kanban dispatcher: effective max_in_progress=%s (configured=%s)",
+                effective_max_in_progress, max_in_progress)
     if max_in_progress is None and effective_max_in_progress is not None:
         logger.info(
             "kanban dispatcher: kanban.max_in_progress unset; using "
@@ -185,6 +207,7 @@ class _KanbanDispatcher:
             return None
         kwargs = {k: v for k, v in asdict(self.settings).items() if k != "interval"}
         try:
+            kwargs.update(_live_dispatch_limits())
             # No explicit init_db(): connect() runs the migration once per
             # process (see the matching note in the notifier collector).
             # Pin-first: the tick is machine flow — on a box whose env pins

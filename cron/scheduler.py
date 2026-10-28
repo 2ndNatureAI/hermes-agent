@@ -607,6 +607,17 @@ def _inflight_home_path(home_key: str) -> Path:
 # ids so host-wide consumers (shutdown drain, idle-exit, metrics) see the union across profiles.
 _running_job_ids: set = set()
 _running_fire_owners: dict[tuple, dict[object, tuple[Optional[str], Path]]] = {}
+# Execution token -> durable execution_id for THIS process's in-process fires, recorded next to
+# the fire-owner registry (same ``_running_lock``). Shutdown
+# (``mark_running_jobs_interrupted``) closes each ledger row itself — owner-fenced via
+# ``finish_execution``/``give_up_execution`` under the fire's profile-home cron scope — so the
+# row reaches a durable terminal state before the owning process exits, instead of staying
+# 'running' until a later dead-owner sweep files it as an unverifiable ``unknown``
+# (#scheduler-restart-unknown). Absent token = external/restart-safe handoff: that worker owns
+# its own row.
+_RUNNING_EXECUTION_IDS: dict[object, Optional[str]] = {}
+_running_execution_ids = _RUNNING_EXECUTION_IDS
+
 # Parent gateway threads synchronously waiting on restart-safe scope workers.
 # Shutdown must not misclassify these as ownerless in-process runs: the tool
 # process sweep cannot reach the worker's transient scope.
@@ -1169,12 +1180,48 @@ def mark_running_jobs_interrupted(
             continue
         try:
             with use_cron_store(profile_home):
+                # Durable ledger closure BEFORE the owner exits (#scheduler-restart-unknown) and
+                # BEFORE the jobs.json write: first — an in-process attempt whose tool subprocess
+                # was just killed must reach its terminal ledger state even if the jobs.json write
+                # blows up (the closure ordering must not depend on the less durable store);
+                # second — the row would otherwise stay 'running' in executions.db until a later
+                # process's dead-owner sweep stamped it 'unknown' with an unverifiable cause.
+                # Fenced to THIS process's fingerprint: a row owned by a live in-gateway firer, or
+                # a handoff row the adopted worker owns, is left untouched here
+                # (finish_execution/give_up_execution return None). Suppressed on its own so a
+                # ledger failure cannot skip the jobs.json write below (and the jobs.json write
+                # failing cannot skip this closure): the two best-effort writes are independent.
+                with contextlib.suppress(Exception):
+                    _finalize_interrupted_execution(_token, reason)
                 if mark_job_run(
                     job_id, False, reason, expected_fire_owner=fire_owner):
                     marked.append(job_id)
         except Exception as e:
             logger.warning("Failed to mark job %s interrupted: %s", job_id, e)
     return marked
+
+
+def _finalize_interrupted_execution(token: object, reason: str) -> None:
+    """Close THIS process's ledger row for an interrupted in-process fire (#scheduler-restart-unknown).
+
+    Called from ``mark_running_jobs_interrupted`` while the shutdown drain still runs: the row
+    reaches a durable terminal state before the owner can exit, so the next gateway's dead-owner
+    sweep never files it as an unverifiable ``unknown``. ``finish_execution`` is owner-fenced
+    (process fingerprint must match) and adopt-time ``mark_execution_running`` has already
+    flipped adopted handoff rows to this process's fingerprint — so both kinds close here;
+    genuinely-unownable rows (adopted by a worker, or already terminal) are no-ops. The
+    interrupted flag stays set: ``run_one_job`` still sees the interruption before its
+    ``last_status`` write.
+    """
+    execution_id = _RUNNING_EXECUTION_IDS.get(token)
+    if not execution_id:
+        # Unknown-claimed token (never registered) or a restart-safe/external handoff: that
+        # worker owns its own row. Nothing to close from this process.
+        return
+    from cron.executions import finish_execution, give_up_execution
+
+    if finish_execution(execution_id, success=False, error=reason) is None:
+        give_up_execution(execution_id, reason=reason)
 
 
 def _is_interrupted(job_id: str, token: Optional[object] = None) -> bool:
@@ -2893,9 +2940,14 @@ def run_one_job(
     execution_token = object()
     profile_home = _get_hermes_home().resolve()
     _fire_key = _inflight_key(job["id"])
+    # Durable execution id for shutdown-time ledger closure (see _running_execution_ids): this
+    # fire runs IN-PROCESS when no external/restart-safe handoff owns it.
+    execution_id = str(job.get("execution_id") or "")
     with _running_lock:
         _running_fire_owners.setdefault(_fire_key, {})[execution_token] = (
             fire_owner or None, profile_home)
+        if os.environ.get("_HERMES_CRON_EXTERNAL_WORKER") != execution_id or not execution_id:
+            _running_execution_ids[execution_token] = execution_id or None
     try:
         with self_removal_delivery_scope(job["id"]):
             return _run_with_fire_claim_heartbeat(
@@ -2916,6 +2968,7 @@ def run_one_job(
                 executions.pop(execution_token, None)
                 if not executions:
                     _running_fire_owners.pop(_fire_key, None)
+            _running_execution_ids.pop(execution_token, None)
 
 
 _OWNERSHIP_LOST_INTERRUPTED = "Interrupted by shutdown before terminal completion."

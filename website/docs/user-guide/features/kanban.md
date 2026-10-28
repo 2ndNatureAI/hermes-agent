@@ -322,6 +322,8 @@ up on the next tick (60s by default).
 kanban:
   dispatch_in_gateway: true        # default
   dispatch_interval_seconds: 60    # default
+  max_in_progress: 1              # host-wide worker cap across boards
+  max_in_progress_per_profile: 1  # cap for each assignee
   review_dispatch: true            # default: spawn the assigned profile with
                                    # the bundled sdlc-review skill. Set false
                                    # for human-only review boards.
@@ -333,6 +335,11 @@ kanban:
                                    # or a bare `dispatch_profiles:` claims
                                    # nothing, and so does an unreadable config.
 ```
+
+The embedded dispatcher re-reads concurrency limits before each board tick.
+Lowering a limit leaves existing workers running and defers new admissions
+until capacity is available. An unreadable or invalid limit defers dispatch
+instead of falling back to the startup limit.
 
 Override the config flag at runtime via `HERMES_KANBAN_DISPATCH_IN_GATEWAY=0`
 for debugging. Standard gateway supervision applies: run `hermes gateway

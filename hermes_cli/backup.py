@@ -509,12 +509,18 @@ def _zip_sqlite_snapshot(zf: zipfile.ZipFile, abs_path: Path, rel_path: Path, ou
 
 def _write_zip_entries(
     zf: zipfile.ZipFile, files_to_add: list[tuple[Path, Path]], out_path: Path,
-    *, on_db_failure, on_error, on_progress, track_bytes: bool) -> int:
+    *, on_db_failure, on_error, on_progress, track_bytes: bool,
+    on_vanished=None) -> int:
     """Add every ``(abs_path, rel_path)`` to *zf*, WAL-safe for ``*.db``; return bytes archived.
 
     ``on_db_failure(rel_path)`` runs when a SQLite snapshot fails (may raise to abort);
     ``on_error(rel_path, exc)`` records a read failure; ``on_progress(i)`` fires every 500 files;
     ``track_bytes`` stats plain files for the size total.
+    ``on_vanished(rel_path)`` runs when a scanned file no longer exists at read time — a
+    scan→archive TOCTOU race with live writers (cron outputs are rewritten/rotated on a
+    schedule). The archive then faithfully reflects final disk state, so this is a skip,
+    not a failure: counting it as one would mark every busy-server backup "incomplete"
+    and block retention pruning indefinitely.
     """
     total_bytes = 0
     for i, (abs_path, rel_path) in enumerate(files_to_add, 1):
@@ -529,6 +535,12 @@ def _write_zip_entries(
                 _write_zip_file(zf, abs_path, str(rel_path))
                 if track_bytes:
                     total_bytes += abs_path.stat().st_size
+        except FileNotFoundError as exc:
+            if on_vanished is not None:
+                on_vanished(rel_path)
+            else:
+                on_error(rel_path, exc)
+            continue
         except (PermissionError, OSError, ValueError) as exc:
             on_error(rel_path, exc)
             continue
@@ -640,12 +652,13 @@ def _run_backup_locked(args, hermes_root: Path) -> bool:
         print(f"  {i}/{file_count} files ...")
         logger.info("backup phase=archive status=progress completed=%d total=%d", i, file_count)
 
+    vanished: list = []
     with _atomic_output_path(out_path) as archive_path, zipfile.ZipFile(
             archive_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         total_bytes = _write_zip_entries(
             zf, files_to_add, out_path, on_progress=_progress, track_bytes=True,
             on_db_failure=lambda rel: errors.append(f"{rel}: SQLite safe copy failed"),
-            on_error=lambda rel, exc: errors.append(f"{rel}: {exc}"))
+            on_error=lambda rel, exc: errors.append(f"{rel}: {exc}"), on_vanished=lambda rel: vanished.append(str(rel)))
         # External memory-provider state never includes ``.db`` files in practice, so no
         # SQLite snapshot is needed; _write_zip_file still drops a failed partial member.
         for abs_path, arcname in external_to_add:
@@ -672,7 +685,10 @@ def _run_backup_locked(args, hermes_root: Path) -> bool:
         print("\n  Excluded directories:\n" + "\n".join(f"    {d}/" for d in sorted(skipped_dirs)))
     if errors:
         _print_capped(f"\n  Archive kept, but {len(errors)} file(s) could not be added:", errors, "  ")
-    else:
+    if vanished:
+        _print_capped(f"\n  Skipped {len(vanished)} file(s) that vanished during the backup "
+                      "(live writers; archive reflects final disk state):", vanished, "  ")
+    if not errors and not vanished:
         print(f"\nRestore with: hermes import {out_path.name}")
     # Prune only after a complete archive: a timer hitting the same unreadable file every run must
     # not rotate the last good backups out in favour of incomplete ones.
@@ -2106,7 +2122,8 @@ def _write_full_zip_backup_locked(out_path: Path, hermes_root: Path) -> Optional
                 archive_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
             _write_zip_entries(
                 zf, files_to_add, out_path, on_db_failure=_db_failure, track_bytes=False,
-                on_error=lambda rel, exc: errors.append(f"{rel}: {exc}"),
+                on_error=lambda rel, exc: errors.append(f"{rel}: {exc}"), on_vanished=lambda rel: logger.info(
+                    "automatic backup phase=archive status=vanished-file skipped=%s", rel),
                 on_progress=lambda i: logger.info(
                     "automatic backup phase=archive status=progress completed=%d total=%d", i, len(files_to_add)))
     except (OSError, _SQLiteSnapshotError) as exc:
