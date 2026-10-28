@@ -4,6 +4,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+from contextlib import closing
 from pathlib import Path
 
 
@@ -66,7 +67,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         # The control proves a main-file copy loses committed rows.
         control = tmp_path / "raw.db"
         control.write_bytes(db.read_bytes())
-        with sqlite3.connect(control) as raw:
+        with closing(sqlite3.connect(control)) as raw:
             assert raw.execute("SELECT * FROM messages").fetchall() == []
         for _ in range(3):
             result = subprocess.run(
@@ -76,7 +77,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
             )
             assert result.returncode == 0, result.stderr
             backup = Path(json.loads(result.stdout)["path"])
-            with sqlite3.connect(backup) as snapshot:
+            with closing(sqlite3.connect(backup)) as snapshot:
                 assert snapshot.execute("SELECT * FROM messages").fetchall() == [("committed only in WAL",)]
                 assert snapshot.execute("PRAGMA integrity_check").fetchone() == ("ok",)
         assert len(list(home.glob("state.db.pre-update-emergency-*.bak"))) == 2

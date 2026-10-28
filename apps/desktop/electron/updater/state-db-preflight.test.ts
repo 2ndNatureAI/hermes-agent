@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { test } from 'vitest'
+import { test, vi } from 'vitest'
 
 import { preflightStateDb, stateDbPreflightTimeoutMs } from './state-db-preflight'
 
@@ -164,25 +164,25 @@ test('an older selected checkout without the snapshot helper refuses before back
 })
 
 test('the deadline grows with the main database and WAL, but stays bounded', (): void => {
-  const home: string = fs.mkdtempSync(path.join(os.tmpdir(), 'preflight-budget-'))
+  let databaseBytes = 0
+  let walBytes = 0
+
+  const stat = vi.spyOn(fs, 'statSync').mockImplementation((file) => ({
+    size: path.basename(String(file)) === 'state.db' ? databaseBytes : walBytes
+  }) as fs.Stats)
 
   try {
-    const floor = stateDbPreflightTimeoutMs(home)
-
-    for (const name of ['state.db', 'state.db-wal']) {
-      fs.writeFileSync(path.join(home, name), '')
-      fs.truncateSync(path.join(home, name), 2 * 1024 ** 3)
-    }
-
-    const withWal = stateDbPreflightTimeoutMs(home)
-    fs.unlinkSync(path.join(home, 'state.db-wal'))
-    const withoutWal = stateDbPreflightTimeoutMs(home)
+    const floor = stateDbPreflightTimeoutMs('profile')
+    databaseBytes = 2 * 1024 ** 3
+    const withoutWal = stateDbPreflightTimeoutMs('profile')
+    walBytes = 2 * 1024 ** 3
+    const withWal = stateDbPreflightTimeoutMs('profile')
     assert.ok(floor >= 5 * 60_000)
     assert.ok(withWal > withoutWal && withoutWal > floor)
-    fs.truncateSync(path.join(home, 'state.db'), 100 * 1024 ** 3)
-    assert.ok(stateDbPreflightTimeoutMs(home) <= 30 * 60_000)
+    databaseBytes = 100 * 1024 ** 3
+    assert.ok(stateDbPreflightTimeoutMs('profile') <= 30 * 60_000)
   } finally {
-    fs.rmSync(home, { recursive: true, force: true })
+    stat.mockRestore()
   }
 })
 

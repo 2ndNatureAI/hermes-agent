@@ -577,6 +577,7 @@ def _check_web_dashboard_import(should_fix: bool, f: Finding) -> None:
     )
 
 
+@doctor_check()
 def _check_gateway_elevation(should_fix: bool, f: Finding) -> None:
     """The live gateway's token must not be elevated: a full-token gateway serves only elevated
     clients, so every non-elevated one (Desktop, standard-console CLI) is refused
@@ -588,7 +589,7 @@ def _check_gateway_elevation(should_fix: bool, f: Finding) -> None:
     if sys.platform != "win32":
         return
     from hermes_cli.gateway import find_gateway_pids
-    from hermes_dir_acl import process_is_elevated, process_elevation
+    from hermes_dir_acl import process_elevation
 
     _section("Windows Gateway Elevation")
     pids = list(find_gateway_pids())
@@ -605,8 +606,12 @@ def _check_gateway_elevation(should_fix: bool, f: Finding) -> None:
                         "Hermes_Gateway scheduled task (or `hermes gateway restart` in a standard "
                         "console), never an administrator prompt")
         return
-    check_ok("Gateway is not elevated", f"(pid {pid}, TokenElevation=False)" if elevated is False else
-             f"(pid {pid}, token probe unreadable from this client — inconclusive, not a defect trace)")
+    if elevated is None:
+        check_warn("Gateway elevation could not be verified", f"(pid {pid}, token unreadable)")
+        f.manual_issues.append(f"Gateway PID {pid}: the process token could not be read; "
+                               "verify its elevation before treating the connection as healthy")
+        return
+    check_ok("Gateway is not elevated", f"(pid {pid}, TokenElevation=False)")
 
 
 @doctor_check()
