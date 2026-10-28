@@ -46,6 +46,8 @@ _BOT_DESKTOP_BROWSER_SENTINEL = "_HERMES_BU_BOT_DESKTOP_BROWSER"
 _REAL_PROFILE_FALLBACK_SENTINEL = "_HERMES_BU_REAL_PROFILE_FALLBACK"
 # local=True whose real profile could not load: run on the local sidecar browser. Popped before launch.
 _LOCAL_FALLBACK_SENTINEL = "_HERMES_BU_LOCAL_FALLBACK"
+# Where new/hidden tabs may be brought to the front: a browser_use_shot.ACTIVATE_* mode. Popped before launch.
+_CLOUD_BROWSER_SENTINEL = "_HERMES_BU_CLOUD_BROWSER"
 
 # Prepended to the model's code for named sessions on SHARED browsers (a /browser connect CDP override): the
 # harness daemon attaches to the first existing page at startup, so two fresh named daemons can land on the
@@ -431,6 +433,10 @@ def _resolve_backend_cdp(env: dict, task_id: Optional[str], session_name: str = 
     provider_key = str(getattr(provider, "name", "") or "").strip().lower()
     if provider_key == _BROWSER_USE_PROVIDER and not _use_gateway(_read_browser_cfg()) and _browser_use_api_key_set():
         env[_PRIVATE_BROWSER_SENTINEL] = "1"  # named BU cloud browsers are exclusive to their daemon
+        # Only intent: the harness attaches to a local Chrome already listening instead of autospawning, so
+        # the live daemon's own report decides.
+        from tools.browser_use_shot import ACTIVATE_IF_CLOUD
+        env[_CLOUD_BROWSER_SENTINEL] = ACTIVATE_IF_CLOUD
         return None
 
     provider_name = type(provider).__name__
@@ -456,6 +462,9 @@ def _resolve_backend_cdp(env: dict, task_id: Optional[str], session_name: str = 
         if err is None:
             _mark_local_browser(env, session, key)
         return err
+    if err is None:
+        from tools.browser_use_shot import ACTIVATE_ALWAYS
+        env[_CLOUD_BROWSER_SENTINEL] = ACTIVATE_ALWAYS  # the provider's own session: the harness connects only there
     # A provider browser keyed bu-named-<name> is exclusive to this session — the
     # own-tab preamble would just leak a blank tab into it.
     if err is None and session_name:
@@ -719,6 +728,10 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     private_browser = env.pop(_PRIVATE_BROWSER_SENTINEL, None)  # always pop: never exported to the CLI
     if session and not private_browser:
         code = _OWN_TAB_PREAMBLE + code
+    # Every backend: capture_screenshot() falls back to jpeg instead of hanging on a png a hidden tab never
+    # renders; only on a cloud browser does it (and new_tab) bring the tab to the front (tools/browser_use_shot.py).
+    from tools.browser_use_shot import ACTIVATE_NEVER, harness_command
+    cmd = harness_command(cmd, activate=env.pop(_CLOUD_BROWSER_SENTINEL, None) or ACTIVATE_NEVER)
 
     workspace = _workspace_dir(task_id)
     if workspace:
@@ -808,19 +821,28 @@ _HEADER_VISION = (
     "with your own vision — never send browser screenshots to a separate vision tool."
 )
 
-_HEADER_TEXT_ONLY = (
-    " Your model cannot view images, so work text-first: page_info() for state, js() for "
-    "reading/extracting DOM text, fill_input(selector, text) for inputs, and "
-    "js(\"document.querySelector('…').click()\") for clicks — skip the screenshot-driven workflow described below."
+_TEXT_FIRST = (
+    "page_info() for state, js() for reading/extracting DOM text, fill_input(selector, text) for inputs, and "
+    "js(\"document.querySelector('…').click()\") for clicks."
 )
 
-# Appended when the local engine is Lightpanda: no graphical renderer, and one CDP
-# connection holds one page — a second Target.createTarget fails with
-# TargetAlreadyLoaded (drop the new_tab() sentence once lightpanda-io/browser#1962 lands).
+# The non-native header states a transport fact (screenshots do not ride back inside THIS
+# tool's results: routing is not ``native`` — e.g. an explicit ``auxiliary.vision`` pin — or
+# the route rejects tool-result media), never a verdict on the model's own vision: models
+# quote "your model cannot view images" against themselves and skip user images (#131568).
+# model_tools.get_tool_definitions() appends the vision_analyze pointer after
+# SCREENSHOTS_DETACHED when the session actually has that tool.
+SCREENSHOTS_DETACHED = " Screenshots are not attached to this tool's results."
+
+_HEADER_TEXT_ONLY = SCREENSHOTS_DETACHED + " Work text-first: " + _TEXT_FIRST
+
+# Lightpanda: no graphical renderer, and one CDP connection holds one page — a second
+# Target.createTarget fails with TargetAlreadyLoaded (drop the new_tab() sentence once
+# lightpanda-io/browser#1962 lands).
 _HEADER_LIGHTPANDA = (
     " The local engine is Lightpanda (no graphical renderer, one page per session): capture_screenshot() "
-    "is unavailable, so work text-first; navigate with new_tab(url) exactly once, then goto_url(url) for "
-    "every later navigation — a second new_tab() fails with TargetAlreadyLoaded."
+    "is unavailable, so work text-first: " + _TEXT_FIRST + " Navigate with new_tab(url) exactly once, then "
+    "goto_url(url) for every later navigation — a second new_tab() fails with TargetAlreadyLoaded."
 )
 
 # Pinned quick-reference for the CLI's pre-imported helpers, replacing the live
@@ -841,12 +863,13 @@ _HELPERS_DIGEST = (
 
 
 def _description_header() -> str:
-    """Header tailored to whether the active model can see images natively"""
+    """Header tailored to whether screenshots ride back natively in this tool's results."""
     if _lazy_call("tools.browser_lightpanda", "lightpanda_engine_status", (False, ""),
                   "lightpanda engine status unavailable")[0]:  # no screenshots, whatever the model sees
-        return _HEADER_BASE + _HEADER_TEXT_ONLY + _HEADER_LIGHTPANDA
-    vision = _lazy_call("tools.vision_tools", "_should_use_native_vision_fast_path", False, "")
-    return _HEADER_BASE + (_HEADER_VISION if vision else _HEADER_TEXT_ONLY)
+        return _HEADER_BASE + _HEADER_LIGHTPANDA
+    if _lazy_call("tools.vision_tools", "_should_use_native_vision_fast_path", False, ""):
+        return _HEADER_BASE + _HEADER_VISION
+    return _HEADER_BASE + _HEADER_TEXT_ONLY
 
 
 def _dynamic_schema_overrides() -> dict:

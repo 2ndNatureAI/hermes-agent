@@ -8,7 +8,9 @@ import { deConnectorCard } from './de_connector_card'
 import { deErrorCodes } from './de_error_codes'
 import { deErrorLayers } from './de_error_layers'
 import { deFirstRun } from './de_first_run'
+import { deGatewayHost } from './de_gateway_host'
 import { deLocalModels } from './de_local_models'
+import { deMemoryLayers } from './de_memory_layers'
 import { deModelMenu } from './de_model_menu'
 import { deModelSettings } from './de_model_settings'
 import { deNotices } from './de_notices'
@@ -16,6 +18,7 @@ import { deNotifications } from './de_notifications'
 import { deOnboarding } from './de_onboarding'
 import { dePluginPreviewAccess } from './de_plugin_preview_access'
 import { dePluginUpdate } from './de_plugin_update'
+import { dePreviewWeb } from './de_preview_web'
 import { deProjects } from './de_projects'
 import { deSharedMetrics } from './de_shared_metrics'
 import { deThemePicker } from './de_theme_picker'
@@ -462,6 +465,7 @@ export const deOverrides = {
       microphoneConstraintsUnsupported: 'Mikrofon-Einschränkungen werden von diesem Gerät nicht unterstützt.',
       microphoneFailed: 'Mikrofon fehlgeschlagen',
       microphoneInUse: 'Das Mikrofon wird bereits von einer anderen App verwendet.',
+      microphoneNeedsHttps: 'Das Mikrofon braucht eine sichere Verbindung. Öffne die Webapp über HTTPS oder über einen SSH-Tunnel zu 127.0.0.1, um es zu nutzen.',
       microphonePermissionDenied: 'Die Mikrofonberechtigung wurde verweigert.',
       microphoneStartFailed: 'Mikrofonaufnahme konnte nicht gestartet werden.',
       microphoneUnsupported: 'Diese Laufzeitumgebung unterstützt keine Mikrofonaufnahme.',
@@ -678,6 +682,7 @@ export const deOverrides = {
     noResults: 'Keine Sprachen gefunden'
   },
   settings: {
+    memoryLayers: deMemoryLayers,
     subpages: {
       appearanceTheme: 'Design',
       appearanceTypography: 'Typografie',
@@ -1680,8 +1685,7 @@ export const deOverrides = {
     },
     gateway: {
       loading: 'Gateway-Einstellungen werden geladen…',
-      unavailableTitle: 'Gateway-Einstellungen nicht verfügbar',
-      unavailableDesc: 'Die Desktop-IPC-Brücke stellt keine Gateway-Einstellungen bereit.',
+      ...deGatewayHost,
       title: 'Gateway-Verbindung',
       envOverride: 'ENV-Überschreibung',
       intro:
@@ -2257,8 +2261,8 @@ export const deOverrides = {
       defaultDirTitle: 'Standard-Projektordner',
       defaultDirDesc:
         'Neue Sessions starten in diesem Ordner, sofern Sie keinen anderen wählen. Nicht festlegen, um Ihr Home-Verzeichnis zu verwenden.',
-      defaultDirUpdated:
-        'Standard-Projektordner aktualisiert – starten Sie einen neuen Chat (Strg/⌘+N), damit er wirksam wird',
+      defaultDirUpdated: shortcut =>
+        `Standard-Projektordner aktualisiert – starten Sie einen neuen Chat${shortcut ? ` (${shortcut})` : ''}, damit er wirksam wird`,
       defaultsTo: label => `Standardmäßig ${label}.`,
       change: 'Ändern',
       choose: 'Auswählen',
@@ -2856,9 +2860,6 @@ export const deOverrides = {
       resume: 'Fortsetzen',
       runNow: 'Jetzt ausführen',
       memoryData: 'Memory-Daten',
-      memoryDataDesc: 'Eingebaute Memory-Dateien, die in jede Session eingefügt werden',
-      memoryProvider: name => `Aktiver Provider: ${name}`,
-      builtinMemory: 'eingebaut',
       memoryFile: 'Agent-Memory (MEMORY.md)',
       userFile: 'Benutzerprofil (USER.md)',
       bytes: size => size,
@@ -3203,8 +3204,10 @@ export const deOverrides = {
     exported: 'Profil exportiert',
     failedImport: 'Profil konnte nicht importiert werden',
     failedExport: 'Profil konnte nicht exportiert werden',
+    exportNeedsHost: name => `Der Browser kann kein Profilarchiv speichern. Führe auf dem Hermes-Host aus: hermes profile export ${name}`,
     allProfiles: 'Alle Profile',
     showAllProfiles: 'Alle Profile anzeigen',
+    notServedHere: 'Hier nicht bereitgestellt',
     switchToProfile: name => `Zu ${name} wechseln`,
     switchToConnection: name => `Zu ${name} wechseln`,
     switchConnectionFailed: name => `Keine Verbindung zu ${name} möglich`,
@@ -4111,6 +4114,8 @@ export const deOverrides = {
     versionDetailsBody:
       'Diese Installation wird außerhalb der App verwaltet. Aktualisieren Sie sie auf dieselbe Weise, wie Sie sie installiert haben.',
     versionDetailsVersion: 'Version',
+    versionDetailsClient: 'Dieses Gerät',
+    versionDetailsBackend: 'Verbundenes Backend',
     versionDetailsCommit: 'Commit',
     versionDetailsBuildOrigin: 'Build-Ursprung',
     versionDetailsDistribution: 'Distribution',
@@ -4615,6 +4620,7 @@ export const deOverrides = {
     }
   },
   rightSidebar: {
+    terminalDropUnquotable: (shell, paths) => `Diese Namen lassen sich in ${shell} nicht sicher eintippen: ${paths}`,
     aria: 'Rechte Sidebar',
     panelsAria: 'Panels der rechten Sidebar',
     files: 'Dateisystem',
@@ -4716,60 +4722,7 @@ export const deOverrides = {
       sentTitle: 'An Chat gesendet',
       sentMessage: count => `Einträge aus dem Log (${count}) wurden zum Composer hinzugefügt`
     },
-    web: {
-      appFailedToBoot: 'Die Vorschau-App konnte nicht gestartet werden',
-      serverNotFound: 'Server nicht gefunden',
-      remoteLoopback:
-        'Diese Adresse verweist auf den Rechner, auf dem Ihr Agent läuft – nicht auf diesen. Das Browserfenster lädt Seiten lokal, daher braucht ein entfernter Entwicklungsserver eine Portweiterleitung oder einen erreichbaren Hostnamen.',
-      failedToLoad: 'Vorschau konnte nicht geladen werden',
-      tryAgain: 'Nochmal versuchen',
-      restarting: 'Hermes wird neu gestartet …',
-      askRestart: 'Hermes bitten, den Server neu zu starten',
-      lookingRestart: taskId => `Hermes sucht nach einem Vorschau-Server zum Neustarten (${taskId})`,
-      restartingTitle: 'Vorschau-Server wird neu gestartet',
-      restartingMessage: 'Hermes arbeitet im Hintergrund. Beobachte im Fortschritt die Vorschau-Konsole.',
-      startRestartFailed: message => `Server-Neustart konnte nicht gestartet werden: ${message}`,
-      restartFailed: 'Server-Neustart fehlgeschlagen',
-      hideConsole: 'Vorschau-Konsole ausblenden',
-      showConsole: 'Vorschau-Konsole anzeigen',
-      hideDevTools: 'Vorschau-DevTools ausblenden',
-      openDevTools: 'Vorschau-DevTools öffnen',
-      goBack: 'Zurück',
-      goForward: 'Vor',
-      reload: 'Seite neu laden',
-      address: 'Adresse',
-      addressPlaceholder: 'Adresse eingeben',
-      blankPageBody: 'Geben Sie oben eine Adresse ein, um zu browsen, oder bitten Sie Hermes, eine Seite zu öffnen.',
-      finishedRestarting: message => `Hermes hat den Vorschau-Server neu gestartet${message ? `: ${message}` : ''}`,
-      failedRestarting: message => `Server-Neustart fehlgeschlagen: ${message}`,
-      unknownError: 'unbekannter Fehler',
-      restartedTitle: 'Vorschau-Server neu gestartet',
-      reloadingNow: 'Die Vorschau wird jetzt neu geladen.',
-      restartFailedTitle: 'Vorschau-Neustart fehlgeschlagen',
-      restartFailedMessage: 'Hermes konnte den Server nicht neu starten.',
-      stillWorking:
-        'Hermes arbeitet noch, aber es ist noch kein Ergebnis des Neustarts eingetroffen. Der Server-Befehl läuft möglicherweise im Vordergrund.',
-      workspaceReloading: 'Arbeitsbereich geändert, Vorschau wird neu geladen',
-      fileChanged: url => `Datei geändert, Vorschau wird neu geladen: ${url}`,
-      filesChanged: (count, url) => `${count} Dateiänderungen, Vorschau wird neu geladen: ${url}`,
-      watchFailed: message => `Vorschau-Datei konnte nicht überwacht werden: ${message}`,
-      moduleMimeDescription:
-        'Modul-Skripte werden mit dem falschen MIME-Typ ausgeliefert. Das bedeutet meist, dass ein statischer Datei-Server eine Vite/React-App ausliefert statt des Projekt-Entwicklungs-Servers.',
-      loadFailedConsole: (code, message) => `Laden fehlgeschlagen${code ? ` (${code})` : ''}: ${message}`,
-      unreachableDescription: 'Die Vorschau-Seite konnte nicht erreicht werden.',
-      openTarget: url => `${url} öffnen`,
-      fallbackTitle: 'Vorschau',
-      annotate: 'Annotieren',
-      annotateOn: 'Annotation beenden',
-      annotateNeedPage: 'Öffnen Sie zuerst eine Seite im In-App-Browser.',
-      annotateFailed: 'Annotationsmodus konnte nicht gestartet werden',
-      commenting: 'Kommentieren',
-      addComments: count => (count === 1 ? '1 Kommentar hinzufügen' : `${count} Kommentare hinzufügen`),
-      commentPlaceholder: 'Kommentar hinzufügen …',
-      commentTitle: n => `Kommentar ${n}`,
-      saveComment: 'Speichern',
-      cancelComment: 'Kommentar abbrechen'
-    }
+    web: dePreviewWeb
   },
   interfaceMode: {
     title: 'Oberflächenmodus',
@@ -5465,6 +5418,7 @@ export const deOverrides = {
     imageAttach: 'Bild anhängen',
     imageWriteFailed: 'Bild konnte nicht auf die Festplatte geschrieben werden.',
     imageAttachFailed: 'Bild-Anhängen fehlgeschlagen',
+    attachFailed: 'Anhängen fehlgeschlagen',
     pastedContent: 'Eingefügter Inhalt',
     pasteAttachFailed: 'Eingefügter Text konnte nicht angehängt werden',
     attachImages: 'Bilder anhängen',
@@ -5472,6 +5426,7 @@ export const deOverrides = {
     noClipboardImage: 'Kein Bild in der Zwischenablage',
     clipboardPasteFailed: 'Zwischenablage-Einfügen fehlgeschlagen',
     dropFiles: 'Dateien ablegen',
+    dropFilesMore: (count: number) => `und ${count} weitere`,
     handoff: {
       pickPlatform: 'Ziel wählen',
       success: platform => `Übergeben an ${platform}. Jederzeit hier fortsetzen.`,
