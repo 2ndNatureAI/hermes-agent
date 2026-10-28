@@ -1785,7 +1785,8 @@ def _apply_pulled_update(
 def _pause_gateways_for_update(opts):
     """Windows pauses here (venv locks); Linux/macOS only arm a pause the commit point performs."""
     try:
-        return _m()._pause_windows_gateways_for_update() or _posix_pause.arm_pause(
+        windows_options = {"allow_cold_start": False} if opts.no_gateway_restart else {}
+        return _m()._pause_windows_gateways_for_update(**windows_options) or _posix_pause.arm_pause(
             no_gateway_restart=opts.no_gateway_restart)
     except RuntimeError:  # update_cmd_windows._abort_on_error / ServicePauseFailed: nothing moved
         _record_stop("gateway_pause_failed")

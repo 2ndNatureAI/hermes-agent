@@ -930,7 +930,7 @@ def _gateway_drain_timeout(socket_acks: list[dict]) -> float:
     return drain_timeout
 
 
-def _pause_windows_gateways_for_update() -> dict | None:
+def _pause_windows_gateways_for_update(*, allow_cold_start: bool = True) -> dict | None:
     """Stop running Windows gateways before mutating the checkout or venv.
 
     Scheduled/startup gateways run via pythonw.exe, invisible to the hermes.exe instance guard, yet keep files
@@ -947,7 +947,7 @@ def _pause_windows_gateways_for_update() -> dict | None:
         adopted, claims = pause_record.adopt_orphans()
     profile_processes, service_gateways, service_gateway_pids, running_pids = _discover_windows_gateways()
     if not running_pids:
-        return _cold_start_pause_token(adopted, claims)
+        return _cold_start_pause_token(adopted, claims, allow_cold_start=allow_cold_start)
     unmapped_pids = [pid for pid in running_pids if pid not in profile_processes and pid not in service_gateway_pids]
     from gateway.status import get_process_start_time
     from hermes_cli.update_fleet_scope import gateway_pid_home
@@ -991,7 +991,8 @@ def _pause_windows_gateways_for_update() -> dict | None:
     # Every profile with ANY live gateway at discovery counts as running: service-supervised ones skip the
     # socket pause (absent from ``profiles``) but the SCM restart brings them back, not a cold-start.
     running_profiles = set(profiles) | {str(p.profile) for p in profile_processes.values()} | {str(s.profile) for s in service_gateways}
-    _record_attested_cold_start_profiles(token, running_profiles)
+    if allow_cold_start:
+        _record_attested_cold_start_profiles(token, running_profiles)
     try:
         token = _pause_windows_gateway_services(service_gateways, token, profiles, unmapped)
     except ServicePauseFailed as exc:
@@ -1001,14 +1002,15 @@ def _pause_windows_gateways_for_update() -> dict | None:
     return pause_record.finish_pause(token, intended, adopted)
 
 
-def _cold_start_pause_token(adopted: dict | None, claims: list) -> dict | None:
-    """No gateway runs: the cold-start plan, plus any orphaned set adopted from a killed update."""
+def _cold_start_pause_token(adopted: dict | None, claims: list, *, allow_cold_start: bool = True) -> dict | None:
+    """Optionally arm new cold starts; preserve any set a killed update already paused."""
     from hermes_cli import update_pause_record as pause_record
-    token = _windows_cold_start_plan()
+    token = _windows_cold_start_plan() if allow_cold_start else None
     # Other profiles may hold a dead attestation even when the active profile owes nothing
     # (clean exit, autostart not installed): give them a token to ride on.
     probe = token if token is not None else {"resume_needed": True, "profiles": {}, "unmapped_pids": [], "unmapped": []}
-    _record_attested_cold_start_profiles(probe, set())
+    if allow_cold_start:
+        _record_attested_cold_start_profiles(probe, set())
     token = probe if probe.get("cold_start_profiles") else token
     if adopted is None:
         return pause_record.stamp_tree(token) if token is not None else None
