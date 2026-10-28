@@ -1540,6 +1540,64 @@ def adopt_worker_pid(conn: sqlite3.Connection, task_id: str, run_id: int, pid: i
     return True
 
 
+def _stamp_resolved_model_metadata(conn: sqlite3.Connection, task_id: str, task: Task) -> None:
+    """After a successful spawn, record the claim-time resolved model/provider/effort
+    on the active run metadata so run history answers what model actually ran this
+    task, without re-resolving from profile config on every read.
+
+    Idempotent: repeated calls with the same task carry the same blob, so re-dispatch
+    of a re-claimed task does not balloon the metadata.
+    """
+    run_id = _kb._current_run_id(conn, task_id)
+    if run_id is None:
+        return
+    if not task.assignee:
+        return
+
+    model = task.model_override
+    provider = task.provider_override
+    if not model:
+        try:
+            from pathlib import Path as _Path
+            from hermes_cli.profiles import resolve_profile_env, _read_config_model
+            profile_dir = _Path(resolve_profile_env(task.assignee))
+            model, provider = _read_config_model(profile_dir)
+        except Exception:
+            model = None
+            provider = None
+
+    effort = task.reasoning_effort
+    if not effort:
+        try:
+            from pathlib import Path as _Path2
+            from hermes_cli.config import read_user_config_raw
+            from hermes_cli.profiles import resolve_profile_env
+            profile_dir = _Path2(resolve_profile_env(task.assignee))
+            cfg = read_user_config_raw(profile_dir / "config.yaml")
+            effort = (cfg.get("agent") or {}).get("reasoning_effort")
+        except Exception:
+            effort = None
+
+    if model is None:
+        return
+
+    blob = {"model": model or "", "provider": provider or "", "effort": effort or ""}
+
+    row = conn.execute(
+        "SELECT metadata FROM task_runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    existing = _kb._json_dict(row["metadata"]) if row and row["metadata"] else {}
+    if existing.get("model") == blob:
+        return
+    merged = dict(existing)
+    merged["model"] = blob
+    import json as _json
+    conn.execute(
+        "UPDATE task_runs SET metadata = ? WHERE id = ?",
+        (_json.dumps(merged, ensure_ascii=False), run_id),
+    )
+
+
 def _clear_failure_counter(conn: sqlite3.Connection, task_id: str) -> None:
     """Reset the unified consecutive-failures counter.
 
@@ -2168,6 +2226,7 @@ def _dispatch_lane_task(
         pid = _call_spawn_fn(spawn_fn if spawn_fn is not None else _default_spawn, claimed, str(workspace), board)
         if pid:
             _set_worker_pid(conn, claimed.id, int(pid), run_id=claimed.current_run_id, claim_lock=claimed.claim_lock)
+            _stamp_resolved_model_metadata(conn, claimed.id, claimed)
         # Fires AFTER the PID (when reported) is durably persisted. Best-effort.
         _kb._fire_worker_spawned_hook(conn, claimed, str(workspace), pid, board=board)
         # consecutive_failures is deliberately NOT reset here: resetting on

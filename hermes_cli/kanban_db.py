@@ -1940,6 +1940,20 @@ def _end_run(
     run_id = _current_run_id(conn, task_id)
     if run_id is None:
         return None
+    # Merge completion metadata onto existing run metadata (claim-time stamps
+    # such as the resolved-model blob must survive the terminal write).
+    existing_meta: dict = {}
+    row = conn.execute("SELECT metadata FROM task_runs WHERE id = ?", (run_id,)).fetchone()
+    if row and row["metadata"]:
+        try:
+            existing_meta = json.loads(row["metadata"])
+            if not isinstance(existing_meta, dict):
+                existing_meta = {}
+        except Exception:
+            existing_meta = {}
+    merged_meta = dict(existing_meta)
+    if metadata:
+        merged_meta.update(metadata)
     conn.execute(
         """
         UPDATE task_runs
@@ -1953,7 +1967,7 @@ def _end_run(
          WHERE id = ?
            AND ended_at IS NULL
         """,
-        (status or outcome, outcome, summary, error, _json_or_null(metadata), now, run_id),
+        (status or outcome, outcome, summary, error, _json_or_null(merged_meta or None), now, run_id),
     )
     conn.execute("UPDATE tasks SET current_run_id = NULL WHERE id = ?", (task_id,))
     return run_id
