@@ -101,16 +101,13 @@ export function useStatusSnapshot(
       // its write happens inside the store, so hand it this run's liveness: a
       // reply that lands after a source/profile switch must not repaint the
       // shared atom the new run already answered.
-      const [inferenceResult] = await Promise.allSettled([
-        evaluateRuntimeReadiness(requestGateway),
-        refreshFreeTierStatus(requestGateway, () => !cancelled)
-      ])
+      const inferenceRequest = evaluateRuntimeReadiness(requestGateway)
+      void refreshFreeTierStatus(requestGateway, () => !cancelled)
+      const inference = await inferenceRequest
 
-      if (cancelled || inferenceResult.status !== 'fulfilled') {
+      if (cancelled) {
         return
       }
-
-      const inference = inferenceResult.value
 
       if (inference.source !== 'fallback') {
         // runtime_check/setup_status returned an authoritative boolean.
