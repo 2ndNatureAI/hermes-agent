@@ -2222,6 +2222,62 @@ def _dispatch_lane_task(
         # worker's system prompt via KANBAN_GUIDANCE.
         claimed.skills = list(dict.fromkeys([*(claimed.skills or []), "sdlc-review"]))
     try:
+        # Quota-wall dispatch fallback (t_e7827d91; DESIGN.md t_abe60e11 D1-D3):
+        # when the primary provider is quota-walled (latest run rate_limited
+        # with fresh attribution), hand the claim a config-declared healthy
+        # fallback (model, provider) so the card dispatches instead of
+        # bouncing off the same wall. Dormant gate (default OFF, D2):
+        # providers.routers.quota_fallback.enabled. Board model_override
+        # always wins. D4 stall telemetry (dispatch_stall.jsonl) records
+        # regardless of the gate. D3: the override is PERSISTED on the task
+        # row (same columns set_model_override writes) + a full-attribution
+        # event, so the gateway owner's params_policy re-read (kanban_run ->
+        # get_task) applies it to the actual session — an in-memory-only
+        # mutation never reaches the owner.
+        fallback_lanes = None
+        try:
+            from hermes_cli.kanban_quota_fallback import claim_lane as _quota_claim_lane
+
+            fallback_lanes = _quota_claim_lane(conn, claimed, lane=lane)
+        except Exception as _quota_exc:  # never let fallback break dispatch (DESIGN §8)
+            _kb._log.debug("kanban dispatch: quota fallback skipped (%s)", _quota_exc)
+
+        if fallback_lanes:
+            fb_model, fb_provider = fallback_lanes
+            # Rides the same dispatch-time override path the Jev router uses:
+            # _stamp_resolved_model_metadata resolves task.model_override
+            # first and writes it into this run's metadata (run-fields
+            # convention untouched — the stamp is the audit trail AND the
+            # cooldown evidence, DESIGN D3).
+            claimed.model_override, claimed.provider_override = fb_model, fb_provider
+            persisted = False
+            try:
+                from hermes_cli.kanban_quota_fallback import _persist_fallback_override
+
+                persisted = _persist_fallback_override(conn, claimed.id, fb_model, fb_provider)
+            except Exception as _quota_exc:  # persist failure: degrade to in-memory only, never break dispatch
+                _kb._log.debug(
+                    "kanban dispatch: quota fallback persist skipped for %s (%s)", claimed.id, _quota_exc)
+            if not persisted:
+                try:  # audit the degraded (non-persistent) pick too
+                    _reason = None
+                    try:
+                        from hermes_cli.kanban_quota_fallback import reason as _quota_reason
+
+                        _reason = _quota_reason()
+                    except Exception:
+                        pass
+                    with _kb.write_txn(conn):
+                        _kb._append_event(
+                            conn, claimed.id, "quota_fallback_lane_picked",
+                            {"model": fb_model, "provider": fb_provider,
+                             "walled_model": None, "walled_provider": None,
+                             "source": "dispatch.quota_fallback", "persisted": False,
+                             "reason": _reason},
+                        )
+                except Exception:
+                    pass
+
         pid = _call_spawn_fn(spawn_fn if spawn_fn is not None else _default_spawn, claimed, str(workspace), board)
         if pid:
             _set_worker_pid(conn, claimed.id, int(pid), run_id=claimed.current_run_id, claim_lock=claimed.claim_lock)
