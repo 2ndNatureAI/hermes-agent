@@ -673,6 +673,8 @@ hermes kanban create "audit auth flow" \
 
 The dispatcher emits one `--skills <name>` flag per skill listed, so the worker spawns with all of them loaded on top of the auto-injected kanban guidance. The skill names must match skills that are actually installed on the assignee's profile (run `hermes skills list` to see what's available); there's no runtime install.
 
+Required skills must also be enabled in that profile. If any required skill is unavailable, the managed worker parks its exact attempt as `blocked` with the missing skill names, profile operator, and recovery action in the run summary. It settles its execution receipt without spending repeated crash retries. Install or enable the named skills, verify they load, then explicitly unblock the card; a review attempt returns to the review lane. Skills disabled by the operator are never loaded automatically.
+
 ### Per-task model override
 
 Pin a task's worker to a specific model (and optionally provider), independent of the assignee profile's default:

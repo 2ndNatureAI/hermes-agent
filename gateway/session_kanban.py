@@ -383,9 +383,10 @@ KANBAN_TURN_AUTHOR = {'id': 'kanban:dispatcher', 'name': 'Kanban dispatcher', 'i
 
 def _run_task_turns(agent, frame, history, context):
     from agent.skill_commands import build_preloaded_skills_prompt
-    skills, loaded, missing = build_preloaded_skills_prompt(context['skills'], task_id=agent.session_id)
-    if missing and not loaded:
-        raise ValueError('kanban_skills_unavailable')
+    skills, _loaded, missing = build_preloaded_skills_prompt(context['skills'], task_id=agent.session_id)
+    if missing:
+        from gateway.session_kanban_skills import unavailable_skills_result
+        return unavailable_skills_result(context, missing)
     prompt = '\n\n'.join(p for p in (skills, context['context'], frame['text']) if p)
     result = agent.run_conversation(prompt, conversation_history=history, turn_author=KANBAN_TURN_AUTHOR)
 
