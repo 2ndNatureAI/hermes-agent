@@ -36,3 +36,17 @@ def test_guarded_todo_hold_refuses_a_new_running_owner(tmp_path, monkeypatch):
         assert not kb.block_task(conn, child, expected_status='todo', kind='needs_input', reason='stale observer')
         after = kb.get_task(conn, child)
         assert (after.status, after.current_run_id, after.claim_lock) == (before.status, before.current_run_id, before.claim_lock)
+
+
+def test_release_exact_hold_survives_comment_but_refuses_a_new_hold(tmp_path, monkeypatch):
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    kb.init_db()
+    with closing(connect()) as conn:
+        child = kb.create_task(conn, title='held', assignee='default')
+        assert kb.block_task(conn, child, kind='needs_input', reason='first hold')
+        first = conn.execute("SELECT max(id) FROM task_events WHERE task_id=? AND kind='blocked'", (child,)).fetchone()[0]
+        kb.add_comment(conn, child, 'independent', 'Read-only review does not revoke this hold')
+        assert kb.unblock_task(conn, child, expected_block_event_id=first)
+        assert kb.block_task(conn, child, reason='new unrelated owner hold')
+        assert not kb.unblock_task(conn, child, expected_block_event_id=first)
+        assert kb.get_task(conn, child).status == 'blocked'

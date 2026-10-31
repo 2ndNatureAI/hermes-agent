@@ -15,3 +15,17 @@ def block_source(conn, task_id, expected_status, kind):
     if row is not None and row['status'] == 'todo' and (expected_status != 'todo' or kind != 'needs_input'):
         return None
     return row
+
+
+def unblock_source_matches(conn, task_id, expected_event_id):
+    if expected_event_id is None:
+        return True
+    row = conn.execute(
+        "SELECT id FROM tasks WHERE id=? AND status='blocked' AND claim_lock IS NULL AND current_run_id IS NULL",
+        (task_id,),
+    ).fetchone()
+    event = conn.execute(
+        "SELECT id,kind FROM task_events WHERE task_id=? AND kind NOT IN ('commented','attached') ORDER BY id DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    return row is not None and event is not None and event['kind'] == 'blocked' and event['id'] == expected_event_id
