@@ -2244,6 +2244,20 @@ def _dispatch_lane_task(
 
         if fallback_lanes:
             fb_model, fb_provider = fallback_lanes
+            # DESIGN D1 attribution resolved by this same claim seam — the
+            # persisted override event must carry the wall evidence it was
+            # covering for (t_27cf3f73 repair 2): walled_model/walled_provider
+            # ride through the real dispatch path, not null.
+            walled_attrib = None
+            _quota_wall = None
+            try:
+                from hermes_cli.kanban_quota_fallback import wall as _quota_wall_fn
+
+                _quota_wall = _quota_wall_fn()
+            except Exception:
+                _quota_wall = None
+            if _quota_wall and isinstance(_quota_wall, tuple) and len(_quota_wall) == 2:
+                walled_attrib = (str(_quota_wall[0]), str(_quota_wall[1]))
             # Rides the same dispatch-time override path the Jev router uses:
             # _stamp_resolved_model_metadata resolves task.model_override
             # first and writes it into this run's metadata (run-fields
@@ -2254,7 +2268,8 @@ def _dispatch_lane_task(
             try:
                 from hermes_cli.kanban_quota_fallback import _persist_fallback_override
 
-                persisted = _persist_fallback_override(conn, claimed.id, fb_model, fb_provider)
+                persisted = _persist_fallback_override(
+                    conn, claimed.id, fb_model, fb_provider, walled=walled_attrib)
             except Exception as _quota_exc:  # persist failure: degrade to in-memory only, never break dispatch
                 _kb._log.debug(
                     "kanban dispatch: quota fallback persist skipped for %s (%s)", claimed.id, _quota_exc)
@@ -2271,7 +2286,8 @@ def _dispatch_lane_task(
                         _kb._append_event(
                             conn, claimed.id, "quota_fallback_lane_picked",
                             {"model": fb_model, "provider": fb_provider,
-                             "walled_model": None, "walled_provider": None,
+                             "walled_model": (walled_attrib[0] if walled_attrib else None),
+                             "walled_provider": (walled_attrib[1] if walled_attrib else None),
                              "source": "dispatch.quota_fallback", "persisted": False,
                              "reason": _reason},
                         )

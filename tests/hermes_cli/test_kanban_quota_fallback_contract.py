@@ -89,7 +89,9 @@ def _enable_gate(monkeypatch):
     import hermes_cli.config as _hconfig
     monkeypatch.setattr(
         _hconfig, "read_raw_config_readonly",
-        lambda *a, **k: {"providers": {"routers": {"quota_fallback": {"enabled": True}}}},
+        # strict-D2: nested stubs gating a mere router would silently make
+        # every merge lane ineligible, so the merge provider is declared too.
+        lambda *a, **k: {'providers': {'merge': {'models': ['zai/glm-5.3-flash', 'deepseek/deepseek-v4-flash-0731']}, 'routers': {'quota_fallback': {'enabled': True}}}},
         raising=False,
     )
 
@@ -166,9 +168,11 @@ class TestLaneEligibility:
         assert qf._lane_eligible(
             {"model": "zai/glm-5.3-flash", "provider": "merge"}, "openai-codex") is True
 
-    def test_empty_default_allowlist_treated_as_no_pin(self, monkeypatch):
-        """An absent/empty providers.merge.models block = no pin evidence in
-        config; the guard declines to enforce a pin it cannot see."""
+    def test_unpinned_merge_lane_fails_closed(self, monkeypatch):
+        """Provider block present but no explicit providers.merge.models
+        allowlist (reviewer verdict 1, replace old no-pin-passes test):
+        there is no proof the provider serves this model -> no proof, no
+        route (DESIGN §2 (i) fail-closed)."""
         import hermes_cli.config as _hconfig
         monkeypatch.setattr(
             _hconfig, "read_raw_config_readonly",
@@ -176,7 +180,48 @@ class TestLaneEligibility:
             raising=False,
         )
         assert qf._lane_eligible(
-            {"model": "anything/here", "provider": "merge"}, "walled") is True
+            {"model": "anything/here", "provider": "merge"}, "walled") is False
+
+
+    def test_empty_allowlist_fails_closed(self, monkeypatch):
+        """Explicit providers.merge.models: [] also fails closed (Main
+        prehandoff probe: an empty allowlist never proves the model is
+        served — the strict-D2 membership gate covers [])."""
+        import hermes_cli.config as _hconfig
+        monkeypatch.setattr(
+            _hconfig, "read_raw_config_readonly",
+            lambda *a, **k: {'providers': {'merge': {'models': []}, 'routers': {'quota_fallback': {'enabled': True}}}},
+            raising=False,
+        )
+        assert qf._lane_eligible(
+            {"model": "synthetic/model", "provider": "merge"}, "walled") is False
+
+    def test_unconfigured_provider_fails_closed(self, monkeypatch):
+        """Providers block absent entirely: §2 (i) provider existence is
+        unprovable -> fail closed (False), merge or not."""
+        import hermes_cli.config as _hconfig
+        monkeypatch.setattr(
+            _hconfig, "read_raw_config_readonly",
+            lambda *a, **k: {},
+            raising=False,
+        )
+        assert qf._lane_eligible(
+            {"model": "some/model", "provider": "merge"}, "openai-codex") is False
+        assert qf._lane_eligible(
+            {"model": "any/model", "provider": "local-abliterated"}, "openai-codex") is False
+
+    def test_configured_nonmerge_provider_lane_is_eligible(self, monkeypatch):
+        """Positive control (reviewer ask: configured control case): a lane
+        served by a non-merge provider that EXISTS in config is eligible
+        once §2 (iii) exclusions and the walled-provider rule pass."""
+        import hermes_cli.config as _hconfig
+        monkeypatch.setattr(
+            _hconfig, "read_raw_config_readonly",
+            lambda *a, **k: {"providers": {"local-abliterated": {"base_url": "http://127.0.0.1:8081/v1"}}},
+            raising=False,
+        )
+        assert qf._lane_eligible(
+            {"model": "huihui/qwen3-8b", "provider": "local-abliterated"}, "openai-codex") is True
 
     def test_unreadable_allowlist_fails_closed(self, monkeypatch):
         import hermes_cli.config as _hconfig

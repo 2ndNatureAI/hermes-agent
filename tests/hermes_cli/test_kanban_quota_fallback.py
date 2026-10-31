@@ -158,7 +158,7 @@ class TestGateAndLanes:
         import hermes_cli.config as hconfig
         monkeypatch.setattr(
             hconfig, "read_raw_config_readonly",
-            lambda *a, **k: {"providers": {"routers": {"quota_fallback": {"enabled": True}}}},
+            lambda *a, **k: {"providers": {"merge": {"models": ["zai/glm-5.3-flash", "deepseek/deepseek-v4-flash-0731"]}, "routers": {"quota_fallback": {"enabled": True}}}},
             raising=False,
         )
         assert qf.fallback_enabled() is True
@@ -196,7 +196,7 @@ class TestGateAndLanes:
         import hermes_cli.config as _hconfig
         monkeypatch.setattr(
             _hconfig, "read_raw_config_readonly",
-            lambda *a, **k: {"providers": {"routers": {"quota_fallback": {"enabled": True}}}},
+            lambda *a, **k: {'providers': {'merge': {'models': ['zai/glm-5.3-flash', 'deepseek/deepseek-v4-flash-0731']}, 'routers': {'quota_fallback': {'enabled': True}}}},
             raising=False,
         )
         monkeypatch.setattr(qf, "_fallback_lanes", lambda: [{"model": "zai/glm-5.3-flash", "provider": "merge"}])
@@ -279,7 +279,7 @@ class TestCooldownAndFloor:
         import hermes_cli.config as _hconfig
         monkeypatch.setattr(
             _hconfig, "read_raw_config_readonly",
-            lambda *a, **k: {"providers": {"routers": {"quota_fallback": {"enabled": True}}}},
+            lambda *a, **k: {'providers': {'routers': {'quota_fallback': {'enabled': True}}, 'merge': {'models': ['zai/glm-5.3-flash', 'deepseek/deepseek-v4-flash-0731']}, 'test-alt': {'base_url': 'https://alt.invalid'}}},
             raising=False,
         )
         monkeypatch.setattr(qf, "_fallback_lanes", lambda: [
@@ -296,7 +296,7 @@ class TestCooldownAndFloor:
         import hermes_cli.config as _hconfig
         monkeypatch.setattr(
             _hconfig, "read_raw_config_readonly",
-            lambda *a, **k: {"providers": {"routers": {"quota_fallback": {"enabled": True}}}},
+            lambda *a, **k: {'providers': {'merge': {'models': ['zai/glm-5.3-flash', 'deepseek/deepseek-v4-flash-0731']}, 'routers': {'quota_fallback': {'enabled': True}}}},
             raising=False,
         )
         _seed_run(db)  # codex walled
@@ -317,7 +317,7 @@ class TestCooldownAndFloor:
         import hermes_cli.config as _hconfig
         monkeypatch.setattr(
             _hconfig, "read_raw_config_readonly",
-            lambda *a, **k: {"providers": {"routers": {"quota_fallback": {"enabled": True}}}},
+            lambda *a, **k: {'providers': {'merge': {'models': ['zai/glm-5.3-flash', 'deepseek/deepseek-v4-flash-0731']}, 'routers': {'quota_fallback': {'enabled': True}}}},
             raising=False,
         )
         _seed_run(db, provider="openai-codex")
@@ -329,19 +329,14 @@ class TestCooldownAndFloor:
 
         monkeypatch.setattr(
             hconfig, "read_raw_config_readonly",
-            lambda *a, **k: {"providers": {"routers": {"quota_fallback": {
-                "fallbacks": [{"model": "c1", "provider": "p1"}],
-            }}}},
+            lambda *a, **k: {'providers': {'routers': {'quota_fallback': {'fallbacks': [{'model': 'c1', 'provider': 'p1'}]}}, 'p1': {'base_url': 'https://p1.invalid'}}},
             raising=False,
         )
         monkeypatch.setattr(qf, "_ledger_dir", lambda: tmp_path)
         import hermes_cli.config as _hconfig
         monkeypatch.setattr(
             _hconfig, "read_raw_config_readonly",
-            lambda *a, **k: {"providers": {"routers": {"quota_fallback": {
-                "enabled": True,
-                "fallbacks": [{"model": "c1", "provider": "p1"}],
-            }}}},
+            lambda *a, **k: {'providers': {'routers': {'quota_fallback': {'enabled': True, 'fallbacks': [{'model': 'c1', 'provider': 'p1'}]}}, 'p1': {'base_url': 'https://p1.invalid'}}},
             raising=False,
         )
         _seed_run(db, provider="openai-codex")
@@ -352,7 +347,7 @@ class TestCooldownAndFloor:
         import hermes_cli.config as _hconfig
         monkeypatch.setattr(
             _hconfig, "read_raw_config_readonly",
-            lambda *a, **k: {"providers": {"routers": {"quota_fallback": {"enabled": True}}}},
+            lambda *a, **k: {'providers': {'merge': {'models': ['zai/glm-5.3-flash', 'deepseek/deepseek-v4-flash-0731']}, 'routers': {'quota_fallback': {'enabled': True}}}},
             raising=False,
         )
         monkeypatch.setattr(qf, "_fallback_lanes", lambda: [

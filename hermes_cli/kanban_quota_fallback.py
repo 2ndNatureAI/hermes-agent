@@ -50,6 +50,19 @@ def reason() -> Optional[str]:
     return getattr(_reason_local, "reason", None)
 
 
+def wall() -> Optional[tuple[str, str]]:
+    """``(walled_model, walled_provider)`` attribution the most recent seam
+    call resolved for its task — independent of whether a fallback was picked
+    (the attribution exists as soon as the wall is proven, DESIGN D1). The
+    dispatch seam carries this into the persisted override event so the
+    full-attribution audit never drops the walled side (t_27cf3f73 repair 2)."""
+    return getattr(_reason_local, "wall", None)
+
+
+def _set_wall(value: Optional[tuple[str, str]]) -> None:
+    _reason_local.wall = value
+
+
 # ---------------------------------------------------------------------------
 # Cool-down (loop guard): a card that already rode a fallback lane and got
 # rate_limited again must NOT be re-routed onto a fallback until its latest
@@ -75,10 +88,38 @@ DEFAULT_FALLBACK_LANES = (
 _QUOTA_FALLBACK_EXCLUDED_MODELS = frozenset({"typesafe/jev-1.13", "xai/grok-4.5"})
 
 
+def _merge_allowlist() -> Optional[list[str]]:
+    """Live ``providers.merge.models`` allowlist (D2 allowlist pin), or None
+    when the config cannot be read. None is never provider evidence — callers
+    must fail closed (DESIGN §2 (i): a fallback lane is eligible only if the
+    provider exists in config with that model's endpoint)."""
+    try:
+        from hermes_cli.config import read_raw_config_readonly
+
+        cfg = read_raw_config_readonly() or {}
+        merge_cfg = (cfg.get("providers") or {}).get("merge") or {}
+        if not isinstance(merge_cfg, dict) or not merge_cfg:
+            return None  # provider block absent = unconfigured provider, not an open gate
+        models = merge_cfg.get("models")
+        if models is None:
+            # Provider block present but no explicit allowlist key: the
+            # menu of models this provider serves is unproven. DESIGN §2
+            # (i): missing allowlist evidence must fail closed (reviewer
+            # verdict 1) — an unproven pin is never bypassed, and an
+            # empty or missing allowlist is not a free pass to any model.
+            return None
+        if not isinstance(models, list):
+            return None  # malformed allowlist = unprovable eligibility
+        return [str(m) for m in models]
+    except Exception:  # health: allow BLE001 -- unreadable config = cannot prove eligibility
+        return None
+
+
 def _lane_eligible(lane: dict[str, str], walled_provider_name: str) -> bool:
     """DESIGN D2 eligibility guard: may ``lane`` serve a claim walled on
-    ``walled_provider_name``? Requires a different provider, and for
-    provider == "merge" the model must appear in the live
+    ``walled_provider_name``? Requires the provider to exist in config with
+    its model endpoint (§2 (i) — missing evidence fails closed) and, for
+    provider == "merge", the model must appear in the live
     ``providers.merge.models`` allowlist pin (respected, never bypassed).
     Unreadable config = cannot prove eligibility -> fail closed (False)."""
     model = str(lane.get("model") or "")
@@ -90,16 +131,24 @@ def _lane_eligible(lane: dict[str, str], walled_provider_name: str) -> bool:
     if model in _QUOTA_FALLBACK_EXCLUDED_MODELS:
         return False
     if provider == "merge":
-        try:
-            from hermes_cli.config import read_raw_config_readonly
+        allowed = _merge_allowlist()
+        if allowed is None:
+            return False  # provider unconfigured / unreadable / no pin evidence: fail closed
+        if model not in allowed:
+            return False  # empty or explicit pin: model must be LISTED to serve (fail closed on [])
+        return True
+    # §2 (i) applies to every provider, not only merge: the routing block
+    # must exist in config (with that model's endpoint mentioned) before the
+    # lane may serve a claim. read_raw_config_readonly returning an empty
+    # dict is no provider evidence -> ineligible.
+    try:
+        from hermes_cli.config import read_raw_config_readonly
 
-            cfg = read_raw_config_readonly() or {}
-            allowed = ((cfg.get("providers") or {}).get("merge") or {}).get("models") or []
-            if allowed and model not in [str(m) for m in allowed]:
-                return False
-        except Exception:  # health: allow BLE001 -- unreadable allowlist = cannot prove eligibility; fail closed
-            return False
-    return True
+        cfg = read_raw_config_readonly() or {}
+    except Exception:  # health: allow BLE001 -- unreadable config -> no proof, no route
+        return False
+    provider_cfg = (cfg.get("providers") or {}).get(provider)
+    return isinstance(provider_cfg, dict) and bool(provider_cfg)
 
 # Never downgraded regardless of existing run attribution: the office
 # quality floor (forge/chief/nova ride frontier or nothing).
@@ -538,12 +587,29 @@ def claim_lane(
     # fallback override with its quota_fallback_lane_cleared audit event
     # before computing anything else. Gated on the module gate so the
     # cleanup contract is reachable only when routing is active at all.
+    # Repair 3 (t_27cf3f73): after a real DB clear, re-read the row and
+    # synchronize the claimed Task's routing fields so the object the
+    # dispatcher carries forward agrees with the persisted board state —
+    # claim-time stamping and spawn/owner re-reads must never see a stale
+    # fallback override the DB no longer holds. Manual overrides are never
+    # touched (cleanup refuses operator-authored overrides by contract).
     if fallback_enabled():
-        _cleanup_fallback_override(conn, task_id)
+        if _cleanup_fallback_override(conn, task_id):
+            try:
+                refreshed = conn.execute(
+                    "SELECT model_override, provider_override FROM tasks WHERE id = ?",
+                    (task_id,),
+                ).fetchone()
+                if refreshed is not None:
+                    task.model_override = refreshed["model_override"]
+                    task.provider_override = refreshed["provider_override"]
+            except Exception:  # health: allow BLE001 -- resync is best-effort; the DB clear is the authority
+                pass
 
     latest = latest_run(conn, task_id)
     static_lane = _static_lane_for_assignee(getattr(task, "assignee", None))
     walled = walled_provider(latest, now, assignee_static_lane=static_lane)
+    _set_wall(walled)  # D1 attribution published even when no fallback is picked
     run_key = f"{latest.get('ended_at') if latest else ''}" if walled else ""
 
     if str(getattr(task, "assignee", "") or "") in _QUOTA_FALLBACK_BLOCKED_ASSIGNMENTS:
