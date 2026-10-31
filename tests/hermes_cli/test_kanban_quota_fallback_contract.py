@@ -223,6 +223,28 @@ class TestLaneEligibility:
         assert qf._lane_eligible(
             {"model": "huihui/qwen3-8b", "provider": "local-abliterated"}, "openai-codex") is True
 
+    def test_nonmerge_metadata_without_endpoint_is_ineligible(self, monkeypatch):
+        import hermes_cli.config as _hconfig
+
+        monkeypatch.setattr(
+            _hconfig, "read_raw_config_readonly",
+            lambda *a, **k: {"providers": {"probe-secondary": {"label": "not an endpoint"}}},
+            raising=False,
+        )
+        assert qf._lane_eligible(
+            {"model": "not-configured", "provider": "probe-secondary"}, "openai-codex") is False
+
+    def test_nonmerge_api_alias_is_valid_endpoint_control(self, monkeypatch):
+        import hermes_cli.config as _hconfig
+
+        monkeypatch.setattr(
+            _hconfig, "read_raw_config_readonly",
+            lambda *a, **k: {"providers": {"probe-secondary": {"api": "https://probe.invalid/v1"}}},
+            raising=False,
+        )
+        assert qf._lane_eligible(
+            {"model": "probe/model", "provider": "probe-secondary"}, "openai-codex") is True
+
     def test_unreadable_allowlist_fails_closed(self, monkeypatch):
         import hermes_cli.config as _hconfig
         monkeypatch.setattr(

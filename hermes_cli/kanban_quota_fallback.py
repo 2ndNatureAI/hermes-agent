@@ -142,13 +142,13 @@ def _lane_eligible(lane: dict[str, str], walled_provider_name: str) -> bool:
     # lane may serve a claim. read_raw_config_readonly returning an empty
     # dict is no provider evidence -> ineligible.
     try:
-        from hermes_cli.config import read_raw_config_readonly
+        from hermes_cli.config import _pick_provider_base_url, read_raw_config_readonly
 
         cfg = read_raw_config_readonly() or {}
     except Exception:  # health: allow BLE001 -- unreadable config -> no proof, no route
         return False
     provider_cfg = (cfg.get("providers") or {}).get(provider)
-    return isinstance(provider_cfg, dict) and bool(provider_cfg)
+    return isinstance(provider_cfg, dict) and bool(_pick_provider_base_url(provider_cfg, provider))
 
 # Never downgraded regardless of existing run attribution: the office
 # quality floor (forge/chief/nova ride frontier or nothing).
