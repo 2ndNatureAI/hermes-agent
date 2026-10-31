@@ -25,6 +25,22 @@ def test_guarded_todo_hold_survives_all_parents_completing(tmp_path, monkeypatch
         assert kb.get_task(conn, child).claim_lock is None
 
 
+def test_initial_held_creation_cannot_release_a_later_operator_hold(tmp_path, monkeypatch):
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    kb.init_db()
+    with closing(connect()) as conn:
+        child = kb.create_task(conn, title='initially held', assignee='default', initial_status='blocked')
+        created = conn.execute("SELECT id FROM task_events WHERE task_id=? AND kind='blocked'", (child,)).fetchone()[0]
+        parent = kb.create_task(conn, title='required parent', assignee='default')
+        kb.link_tasks(conn, parent, child)
+        assert kb.unblock_task(conn, child, expected_block_event_id=created)
+        assert kb.get_task(conn, child).status == 'todo'
+        assert kb.block_task(conn, child, expected_status='todo', kind='needs_input', reason='operator replacement hold')
+        assert not kb.unblock_task(conn, child, expected_block_event_id=created)
+        assert kb.get_task(conn, child).status == 'blocked'
+        assert kb.get_task(conn, child).claim_lock is None
+
+
 def test_guarded_todo_hold_refuses_a_new_running_owner(tmp_path, monkeypatch):
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
     kb.init_db()

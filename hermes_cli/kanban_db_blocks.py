@@ -25,7 +25,7 @@ def unblock_source_matches(conn, task_id, expected_event_id):
         (task_id,),
     ).fetchone()
     event = conn.execute(
-        "SELECT id,kind FROM task_events WHERE task_id=? AND kind NOT IN ('commented','attached') ORDER BY id DESC LIMIT 1",
+        "SELECT id,kind FROM task_events WHERE task_id=? AND kind NOT IN ('commented','attached','linked','unlinked') ORDER BY id DESC LIMIT 1",
         (task_id,),
     ).fetchone()
     return row is not None and event is not None and event['kind'] == 'blocked' and event['id'] == expected_event_id
