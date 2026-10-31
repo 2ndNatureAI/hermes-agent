@@ -147,6 +147,14 @@ rows in the same transaction and refuses while work is live or `unknown`. An inp
 was `started` when its owner died becomes `unknown` at the next owner start and is never
 replayed; its later inputs wait until it is resolved (`prompt.resolve_unknown`).
 
+Managed-worker persistence keeps its exact request in a private durable outbox.
+The worker waits through the owner's write-patience budget plus a bounded reply
+margin. A lost transport answer gets one reconciliation of that same authenticated
+execution, sequence and payload; `worker_receipts` returns the existing result if
+it already committed. This does not replay an agent turn or allocate a new sequence.
+Policy/epoch/assignment refusals are final. If the second answer remains uncertain,
+the original outbox and sticky failure remain for explicit owner reconciliation.
+
 `hermes sessions recover` copies the row-bearing tables above into the
 recovered database (FTS indexes and `schema_version` are regenerated), including
 the lazily-created `delivery_obligations` ledger when the source has one — its

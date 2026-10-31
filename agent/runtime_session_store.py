@@ -194,7 +194,8 @@ class WorkerRPC:
                     self._drop()
                     link = self._connection()
                     link.send(request_id, message)
-                response = link.receive(20)
+                from agent.runtime_receipt_recovery import receipt_budget
+                response = link.receive(receipt_budget(method))
             except BaseException:
                 # Outcome unknown once sent: surface the error and never resend; the next call redials.
                 self._drop()
@@ -336,7 +337,8 @@ class RuntimeSessionStore(RuntimeSessionCompressionMixin, RuntimeSessionLifecycl
             try:
                 while self.journal['pending']:
                     entry = self.journal['pending'][0]
-                    result = self.rpc('worker.persist', **self.scope, **entry)
+                    from agent.runtime_receipt_recovery import reconcile_journaled_receipt
+                    result = reconcile_journaled_receipt(self.rpc, self.scope, entry)
                     candidate = dict(self.journal, pending=self.journal['pending'][1:])
                     candidate = self._compression_receipt_journal(candidate, result)
                     self._save(candidate)
