@@ -59,7 +59,9 @@ def register_ticked_homes(homes) -> None:
     if departed:
         # Late import: cron.scheduler imports this module.
         from cron.scheduler import discard_parallel_pools
+        from cron.scheduler_script_capacity import discard
         discard_parallel_pools(departed)
+        discard(departed)
         forget_stores(departed_stores)
 
 

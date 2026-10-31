@@ -1837,11 +1837,11 @@ DEFAULT_CONFIG = {
         # untouched. User-written bare platforms address home conversations, unlike `all`
         # broadcast expansions, which do not gain mirror eligibility.
         "mirror_delivery": False,
-        # Max due jobs run in parallel per tick. None/0 = unbounded (thread count only); 1 = serial.
-        # Env override: HERMES_CRON_MAX_PARALLEL.
+        # Ordinary cron concurrency: None/0=unbounded, 1=serial; env HERMES_CRON_MAX_PARALLEL.
         "max_parallel_jobs": None,
-        # save_job_output keeps the N most recent .md files per job; 0 or negative disables pruning
-        # (for externally managed cleanup).
+        # Opt-in: one ADDITIONAL native no-agent worker for exact existing control job IDs.
+        "control_script_job_ids": [],
+        # Output retention: N most recent .md files/job; <=0 disables pruning.
         "output_retention": 50,
         # Timeout (seconds) for a no-agent cron script. Env: HERMES_CRON_SCRIPT_TIMEOUT. Keep in
         # sync with cron.scheduler._DEFAULT_SCRIPT_TIMEOUT.

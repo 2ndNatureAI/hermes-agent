@@ -210,6 +210,16 @@ When `workdir` is set:
 Each agent run binds its `workdir` to that run's unique task identity. Workdir jobs therefore use the normal parallel pool without mutating process-global terminal state or leaking paths between concurrent runs. Set `cron.max_parallel_jobs` if you want to limit total cron concurrency.
 :::
 
+An operator can opt specific existing `no_agent: true` jobs into one additional
+script worker per profile with `cron.control_script_job_ids: ["existing-job-id"]`.
+The default is empty: `max_parallel_jobs` then retains its total-concurrency meaning.
+Opting in explicitly adds at most one script alongside that ordinary limit, so a
+long agent job cannot starve an infrastructure control script. This does not add
+a schedule or model slot. Native occurrence, overlap, profile, and fire-claim
+fences remain in force; the atomic claim rechecks that the job is still script-only.
+Review the script's own subprocess/resource behavior before opting it in. Removing
+an ID affects future dispatch and does not cancel or replay queued/running work.
+
 ## Per-job timezone
 
 By default a job's cron expression is read in your profile's timezone (`timezone:` in `config.yaml`). A job can pin its own zone instead, so one profile can serve several markets:

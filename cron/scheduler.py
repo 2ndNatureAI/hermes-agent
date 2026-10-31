@@ -4281,9 +4281,9 @@ def _sweep_mcp_orphans() -> None:
 
 def _process_due_job(job: dict, adapters, loop, verbose: bool) -> bool:
     """Run one due job via the shared ``run_one_job`` body."""
-    # Claim only when the worker actually starts, so a queued lease can't expire first.
+    from cron.scheduler_script_capacity import fire_claim_options
     try:
-        claimed = claim_job_for_fire(job["id"], return_job=True)
+        claimed = claim_job_for_fire(job["id"], **fire_claim_options(job))
     except OSError as exc:
         store_health.note_unwritable(exc, f"skipped job '{job.get('name') or job['id']}'", "claim", [job])
         settle_unstarted_execution(

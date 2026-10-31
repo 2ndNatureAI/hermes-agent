@@ -180,8 +180,11 @@ def _tick_admitted(
         _results: list = []
         _all_futures: list = []
         pool = _sched._get_parallel_pool(_max_workers)
+        from cron.scheduler_script_capacity import select_pool
+        control_ids = (_sched.load_config().get('cron') or {}).get('control_script_job_ids', [])
         for job in due_jobs:
-            fut = _sched._submit_with_guard(job, pool, _process_job)
+            selected_pool, selected_job = select_pool(job, pool, control_ids)
+            fut = _sched._submit_with_guard(selected_job, selected_pool, _process_job)
             if fut is None:
                 continue
             _all_futures.append(fut)

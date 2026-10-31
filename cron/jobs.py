@@ -2699,7 +2699,7 @@ def _machine_id() -> str:
 
 def claim_job_for_fire(
     job_id: str, *, claim_ttl_seconds: int = FIRE_CLAIM_TTL_SECONDS, force: bool = False,
-    manual: bool = False, return_job: bool = False,
+    manual: bool = False, return_job: bool = False, script_only: bool = False,
 ) -> bool | dict[str, Any]:
     """Atomically claim a job for one external 'fire' (multi-machine at-most-once); True iff THIS
     caller won (``CronScheduler.fire_due``: exactly one of N replicas runs a job). Under the
@@ -2711,6 +2711,8 @@ def claim_job_for_fire(
     clears the claim). Otherwise stamp ``fire_claim`` and, for recurring jobs, advance
     ``next_run_at`` so a stale re-delivery cannot re-fire."""
     def apply(jobs, _i, job):
+        if script_only and (job.get('no_agent') is not True or not job.get('script')):
+            return False
         if is_terminal_job(job) and not _is_recoverable_error_job(job):
             return False
         # Both enabled and pause markers must clear — a half-paused record must not claim. ``force``
@@ -2727,9 +2729,7 @@ def claim_job_for_fire(
         # stamping it would make completed_occurrence() skip that slot when it arrives.
         manual_fire = force or manual or job.get("manual_run_at") == job.get("next_run_at")
         instant = None if manual_fire else scheduled_instant(job.get("next_run_at"))
-        # A scheduled tick only ever fires when now >= next_run_at
-        # (_evaluate_due_job returns False while the stored occurrence is still
-        # in the future), so a claim arriving BEFORE the stored next occurrence
+        # A claim arriving BEFORE the stored next occurrence
         # cannot be the tick that owns it — it is a manual / dashboard / webhook
         # fire and must stay occurrence-free. Binding it would make run_one_job
         # stamp that FUTURE instant completed in the ledger: later manual fires
@@ -2752,8 +2752,7 @@ def claim_job_for_fire(
             return False
         if force:
             _activate_job_record(job)
-        # Per-acquisition token: a process may legitimately reclaim its own stale lease, and the
-        # previous runner must not heartbeat the new claim merely because hostname + PID match.
+        # Per-acquisition token prevents an old runner from heartbeating a reclaimed lease.
         job["fire_claim"] = {"at": now.isoformat(), "by": f"{_machine_id()}:{uuid.uuid4().hex}"}
         # Claimed: the occurrence is now owned by a run (its ledger row + fire claim carry it).
         job.pop("pending_slot", None)
