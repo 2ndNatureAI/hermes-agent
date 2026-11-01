@@ -334,9 +334,14 @@ def walled_provider(
     return (str(model or "?"), str(provider))
 
 
-def active_workers(conn: sqlite3.Connection) -> int:
+def active_workers(conn: sqlite3.Connection, *, exclude_task_id: Optional[str] = None) -> int:
+    """Count running rows, optionally excluding the candidate just claimed."""
     try:
-        return int(conn.execute("SELECT COUNT(*) FROM tasks WHERE status = 'running'").fetchone()[0])
+        return int(conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE status = 'running' "
+            "AND (? IS NULL OR id != ?)",
+            (exclude_task_id, exclude_task_id),
+        ).fetchone()[0])
     except Exception:  # health: allow BLE001 -- count failure reads as 0 workers (conservative: the fuel door may surface a stall)
         return 0
 
@@ -627,7 +632,9 @@ def claim_lane(
         # staleness of the walled run (cooldown-tagged to that run; repeats
         # refresh it). A walled claim during normal dispatch traffic is NOT
         # a stall — it's the first requeue tick of an understood cooldown.
-        stalled = active_workers(conn) == 0 and (
+        # claim_task already marked this candidate running before this hook;
+        # only OTHER running tasks are evidence of existing dispatch traffic.
+        stalled = active_workers(conn, exclude_task_id=task_id) == 0 and (
             now - (_epoch(latest.get("ended_at")) or now)
         ) > DISPATCH_GRACE_SECONDS
         if stalled and not _stall_dedupe(conn, task_id, run_key):
