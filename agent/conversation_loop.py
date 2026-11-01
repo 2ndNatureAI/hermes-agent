@@ -1634,6 +1634,7 @@ def _run_conversation_turn(
     moa_config: Optional[dict[str, Any]] = None,
     title_user_message: Optional[str] = None,
     prelude: Optional[Prelude] = None,
+    pending_tail_continuation: tuple[Any, float | None] | None = None,
 ) -> dict[str, Any]:
     """Run a complete conversation with tool calling until completion; returns the result dict.
 
@@ -1689,6 +1690,7 @@ def _run_conversation_turn(
             # user message, so no byte-stable api_content sidecar can be stamped.
             moa_active=bool(moa_config),
             title_user_message=title_user_message,
+            pending_tail_continuation=pending_tail_continuation,
         )
     except PreflightCompressionTimedOut as _preflight_timeout_exc:
         return _preflight_timeout_result(agent, _preflight_timeout_exc, conversation_history)
@@ -1807,6 +1809,7 @@ def run_conversation(
     turn_author: Optional[dict[str, Any]] = None,
     title_user_message: Optional[str] = None,
     prelude: Optional[Prelude] = None,
+    pending_tail_continuation: tuple[Any, float | None] | None = None,
 ) -> dict[str, Any]:
     """Run one turn (see ``_run_conversation_turn``) and export the current-turn boundary.
 
@@ -1842,6 +1845,7 @@ def run_conversation(
                 turn_author=turn_author,
                 title_user_message=title_user_message,
                 prelude=prelude,
+                pending_tail_continuation=pending_tail_continuation,
             )
         finally:
             end_voice_turn_route(agent)

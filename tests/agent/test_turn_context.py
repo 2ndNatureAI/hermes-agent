@@ -19,6 +19,7 @@ from agent.turn_context import (
     TurnContext,
     build_turn_context,
 )
+from agent.iteration_budget import IterationBudget
 
 
 class _FakeTodoStore:
@@ -182,6 +183,46 @@ def test_returns_turn_context_with_user_message_appended():
     assert isinstance(ctx.messages[-1]["timestamp"], float)
     assert ctx.current_turn_user_idx == len(ctx.messages) - 1
     assert ctx.active_system_prompt == "SYSTEM"
+
+
+def test_pending_tail_continuation_keeps_parent_budget_and_clock():
+    agent = _FakeAgent()
+    agent.run_budget_seconds = 300
+    budget = IterationBudget(agent.max_iterations)
+    for _ in range(17):
+        assert budget.consume()
+    agent.iteration_budget = budget
+    agent._run_budget_started_at = 1000.0
+    history = [
+        {"role": "user", "content": "original task"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "call-1", "function": {"name": "lookup", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "call-1", "content": "pending-result sentinel"},
+        {"role": "assistant", "content": "No reply: pending tool result"},
+    ]
+
+    retry = _build(agent, user_message="continue", conversation_history=history,
+                   pending_tail_continuation=(budget, 1000.0))
+    assert agent.iteration_budget is budget
+    assert agent.iteration_budget.remaining == 73
+    assert agent._run_budget_started_at == 1000.0
+    assert [row["role"] for row in retry.messages] == [
+        "user", "assistant", "tool", "assistant", "user"]
+    assert retry.messages[2]["content"] == "pending-result sentinel"
+    assert retry.messages[-1]["content"] == "continue"
+
+    for _ in range(5):
+        assert budget.consume()
+    _build(agent, user_message="continue", conversation_history=history,
+           pending_tail_continuation=(budget, 1000.0))
+    assert agent.iteration_budget is budget
+    assert agent.iteration_budget.remaining == 68
+    assert agent._run_budget_started_at == 1000.0
+
+    _build(agent, user_message="new genuine request", conversation_history=history)
+    assert agent.iteration_budget is not budget
+    assert agent.iteration_budget.remaining == agent.max_iterations == 90
+    assert agent._run_budget_started_at != 1000.0
 
 
 def test_preflight_timeout_stops_turn_before_provider_boundary():

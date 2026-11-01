@@ -156,6 +156,21 @@ class TurnFacadeMixin:
                         title_user_message=title_user_message,
                         prelude=prelude,
                     )
+                    # Pending-tool-tail retry (t_9bd2e446, #55316 sibling): the finalizer's
+                    # pending_tool_result seam fails a turn that ended on a raw tool row
+                    # with no follow-up text. Interactive users type ``continue``; cron
+                    # and kanban workers cannot. With the same agent (session intact) and
+                    # budget remaining, replay the durable transcript tail as the next
+                    # turn so the model can answer the pending result (adjacent small
+                    # model calls, no re-login: run_conversation reuses the cached client).
+                    # Budget-exhausted tails still fail exactly as before.
+                    _pending_tool_retries = 0
+                    while _pending_tool_retries < 2 and _should_retry_pending_tool_tail(self, result):
+                        _pending_tool_retries += 1
+                        result = _retry_pending_tool_tail(
+                            self, result, system_message=system_message,
+                            task_id=effective_task_id, stream_callback=stream_callback,
+                        )
                 finally:
                     # Post-loop relay/task finalization must not receive a late refresh interrupt;
                     # the interrupt clear itself waits for the thread join in the outer finally.
@@ -222,3 +237,52 @@ class TurnFacadeMixin:
         return self.run_conversation(message, stream_callback=stream_callback)["final_response"]
 
     _run_codex_app_server_turn = _forward("agent.codex_runtime", "run_codex_app_server_turn")
+
+
+def _should_retry_pending_tool_tail(agent: Any, result: Any) -> bool:
+    """True when a turn closed with the finalizer's pending_tool_result seam and the agent
+    still holds iteration budget. Cron/kanban cannot type ``continue`` at a tool tail;
+    the facade replays the tail as the next turn instead (t_9bd2e446, #55316). A missing
+    budget object ⇒ never retry (conservative: today's failure — always capped)."""
+    if not isinstance(result, dict):
+        return False
+    if str(result.get("turn_exit_reason") or "") != "pending_tool_result":
+        return False
+    if result.get("interrupted"):
+        return False
+    messages = result.get("messages")
+    if (not isinstance(messages, list) or len(messages) < 2
+            or not isinstance(messages[-2], dict) or messages[-2].get("role") != "tool"
+            or not isinstance(messages[-1], dict) or messages[-1].get("role") != "assistant"):
+        return False
+    if int(getattr(getattr(agent, "iteration_budget", None), "remaining", 0) or 0) <= 0:
+        return False
+    return result.get("failed") is True
+
+
+def _retry_pending_tool_tail(
+    agent: Any, result: dict[str, Any], *, system_message: Any,
+    task_id: Any, stream_callback: Any,
+) -> dict[str, Any]:
+    """One bounded pending-tool-tail retry: replay the recent transcript as the next turn.
+
+    Use the just-finished turn's transcript, which includes the tool result and
+    its failed-turn explanation. The facade's original ``conversation_history``
+    is a snapshot from before that turn and cannot resume the tool result. A
+    visible ``continue`` turn mirrors the interactive recovery and keeps role
+    alternation and the cached prompt intact. Returns the
+    retry turn's result whether it succeeds or fails like today; the call-site loop
+    caps total retries at 2 per parent turn.
+    """
+    from agent.conversation_loop import run_conversation
+
+    logger.warning(
+        "Turn ended on a pending tool result with budget left — replaying the tail as "
+        "the next turn (task=%s)", task_id)
+    return run_conversation(
+        agent, "continue", system_message, result["messages"], task_id=task_id,
+        stream_callback=stream_callback, title_user_message="",
+        pending_tail_continuation=(
+            agent.iteration_budget, getattr(agent, "_run_budget_started_at", None)
+        ),
+    )

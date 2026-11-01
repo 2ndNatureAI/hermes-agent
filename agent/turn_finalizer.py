@@ -622,7 +622,9 @@ def finalize_turn(
         and isinstance(messages[-1], dict)
         and messages[-1].get("role") == "tool"
         and not (getattr(agent, "_current_streamed_assistant_text", "") or "").strip()
-    ):
+    ):  # tool-tail shape left by the loop with budget still unspent (t_9bd2e446 class):
+        # the facade can replay this tail as a bounded next-turn retry — the cron/kanban
+        # equivalent of typing ``continue`` (agent/turn_facade.py).
         _turn_exit_reason = "pending_tool_result"
         failed = True
         final_response = ""

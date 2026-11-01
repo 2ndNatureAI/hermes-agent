@@ -619,7 +619,9 @@ _PER_TURN_RESET_STATE: tuple[tuple[str, Any], ...] = (
 )
 
 
-def _reset_per_turn_agent_state(agent: Any) -> None:
+def _reset_per_turn_agent_state(
+    agent: Any, pending_tail_continuation: tuple[IterationBudget, float | None] | None = None,
+) -> None:
     """Reset retry counters, guardrails, iteration and run budgets at turn start."""
     for name, value in _PER_TURN_RESET_STATE:
         setattr(agent, name, value)
@@ -658,11 +660,15 @@ def _reset_per_turn_agent_state(agent: Any) -> None:
         # gateway: init ran before this turn's callbacks / viewer print sink
         agent._replay_startup_warnings()
 
-    agent.iteration_budget = IterationBudget(agent.max_iterations)
-    # Wall-clock run budget: stamped only when configured (one wrap-up notice per run).
-    agent._run_budget_started_at = (
-        time.time() if getattr(agent, "run_budget_seconds", None) else None
-    )
+    if pending_tail_continuation is None:
+        agent.iteration_budget = IterationBudget(agent.max_iterations)
+        # Wall-clock run budget: stamped only when configured (one wrap-up notice per run).
+        agent._run_budget_started_at = (
+            time.time() if getattr(agent, "run_budget_seconds", None) else None
+        )
+    else:
+        # An internal pending-tail retry belongs to the same logical parent turn.
+        agent.iteration_budget, agent._run_budget_started_at = pending_tail_continuation
     # Reset the streaming context / think scrubbers at the top of each turn.
     for name in ("_stream_context_scrubber", "_stream_think_scrubber"):
         scrubber = getattr(agent, name, None)
@@ -1047,6 +1053,7 @@ def build_turn_context(
     install_safe_stdio, sanitize_surrogates, summarize_user_message_for_log, set_session_context,
     set_current_write_origin, ra, moa_active: bool=False,
     title_user_message: Optional[str]=None,
+    pending_tail_continuation: tuple[IterationBudget, float | None] | None=None,
 ) -> TurnContext:
     """Run the once-per-turn setup and return the loop's input context.
 
@@ -1093,7 +1100,7 @@ def build_turn_context(
         agent, task_id, stream_callback, persist_user_message,
         persist_user_timestamp, persist_user_platform_id,
     )
-    _reset_per_turn_agent_state(agent)
+    _reset_per_turn_agent_state(agent, pending_tail_continuation)
 
     _preview_text = summarize_user_message_for_log(user_message)
     _msg_preview = _preview_text[:80] + ("..." if len(_preview_text) > 80 else "")
