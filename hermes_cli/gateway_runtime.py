@@ -325,8 +325,9 @@ def discover_gateway_endpoint(profile_home: str | Path, *, timeout: float = 2.0)
 def _update_fenced(homes) -> bool:
     """True while an update owns the install, judged the way main's launchers and the Desktop
     judge ``.hermes-update-in-progress``: a live (or still being written) marker, or a dead or
-    malformed one while the checkout lock is held (a killed update's tree still runs). A dead
-    marker over a free lock is a killed update: it never blocks a launch.
+    malformed one while the checkout lock is held (a killed update's tree still runs). Checkout
+    custody also fences before the updater publishes its marker. A dead marker over a free lock
+    is a killed update: it never blocks a launch.
 
     Read-only: a client never clears the updater's fence; the launch-time reclaim
     (``update_lock.read_live_update``) and the next update remove a dead marker. A marker that
@@ -347,9 +348,9 @@ def _update_fenced(homes) -> bool:
             continue
         except OSError:
             return True
-        if update_lock.judge_marker(raw)[0] in {"live", "ours"} or update_lock.checkout_lock_held():
+        if update_lock.judge_marker(raw)[0] in {"live", "ours"}:
             return True
-    return False
+    return update_lock.checkout_lock_held()
 
 
 def _fenced_verdict(home: Path, timeout: float) -> GatewayDiscovery:
