@@ -99,7 +99,7 @@ from hermes_cli.update_cmd_git import (
     _branch_head_label, _branch_head_suffix, _classify_fetch_failure, _count_commits_between,
     _discard_lockfile_churn, _ensure_non_trampoline_git, _get_origin_url, _git_is_trampoline,
     _has_upstream_remote, _is_fork, _locate_real_git, _mark_skip_upstream_prompt,
-    _normalize_managed_eol, _park_detached_head, _portable_git_candidates, _print_fetch_failure,
+    _normalize_managed_eol, _park_detached_head, _portable_git_candidates, _prefer_git_on_path, _print_fetch_failure,
     _print_parked_branch_kept_notice, _print_parked_branch_skip_warning,
     _prune_orphan_rescue_refs, _push_synced_fork, _should_skip_upstream_prompt, _sync_fork_with_upstream,
     _sync_with_upstream_if_needed, UpstreamTargetBroken)
@@ -1618,8 +1618,7 @@ def _prepare_git_command(*, checkout_move=None) -> tuple[bool, list, bool]:
     # Select a working binary before config/CA probes, and let later build
     # children that invoke bare git find that same binary in this updater process.
     git_cmd = _ensure_non_trampoline_git(git_cmd)
-    if git_cmd[0] != "git":
-        os.environ["PATH"] = str(Path(git_cmd[0]).parent) + os.pathsep + os.environ.get("PATH", "")
+    _prefer_git_on_path(git_cmd)
     if sys.platform == "win32" and git_dir.exists():
         _git_run(git_cmd, ["config", "windows.appendAtomically", "false"])
     # One CA story for the whole update: git's libcurl must trust what the

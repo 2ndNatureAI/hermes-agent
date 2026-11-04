@@ -141,6 +141,21 @@ class TestGitTrampolineSelfHeal:
         assert os.environ["PATH"].split(os.pathsep)[0] == str(real.parent)
 
     @pytest.mark.platforms("windows")
+    def test_source_completion_reselects_git_after_pm_activation(self, monkeypatch, tmp_path):
+        from hermes_cli import source_completion, update_cmd_git
+
+        real = update_cmd._locate_real_git()
+        assert real is not None
+        monkeypatch.setenv("PATH", "broken-managed-git-dir" + os.pathsep + os.environ["PATH"])
+        monkeypatch.setattr("hermes_cli._subprocess_compat.expose_pm_git", lambda root: None)
+        monkeypatch.setattr(update_cmd_git, "_ensure_non_trampoline_git", lambda cmd: [str(real)])
+
+        source_completion._expose_working_git(tmp_path)
+        assert os.environ["PATH"].split(os.pathsep)[0] == str(real.parent)
+        probe = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=15, check=False)
+        assert probe.returncode == 0, probe.stderr
+
+    @pytest.mark.platforms("windows")
     def test_trampoline_no_real_git_keeps_command(self, capsys):
         from hermes_cli import update_cmd
 

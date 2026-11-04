@@ -648,6 +648,13 @@ def _ensure_non_trampoline_git(git_cmd: list) -> list:
     return [str(real_git)] + list(git_cmd[1:])
 
 
+def _prefer_git_on_path(git_cmd: list) -> None:
+    """Make the selected Git available to bare-git build children in this process."""
+    selected = Path(git_cmd[0])
+    if selected.is_absolute():
+        os.environ["PATH"] = str(selected.parent) + os.pathsep + os.environ.get("PATH", "")
+
+
 def _npm_lockfile_owners(repo_root: Path) -> set[Path]:
     """Manifest directories whose specs the single root ``package-lock.json`` records: the root plus every
     workspace from the root ``workspaces`` globs (same model as ``update_cmd_deps._npm_manifest_paths``).

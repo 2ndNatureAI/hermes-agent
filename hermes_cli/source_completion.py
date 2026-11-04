@@ -26,6 +26,14 @@ if __name__ == "__main__":
 _PREPARED = "--prepared"
 
 
+def _expose_working_git(root: Path) -> None:
+    from hermes_cli._subprocess_compat import expose_pm_git
+    from hermes_cli.update_cmd_git import _ensure_non_trampoline_git, _prefer_git_on_path
+
+    expose_pm_git(root)
+    _prefer_git_on_path(_ensure_non_trampoline_git(["git"]))
+
+
 def complete_source_checkout(
     root: Path,
     *,
@@ -99,11 +107,10 @@ def _complete_locked(
     from hermes_cli.venv_sync import publish_launchers
 
     try:
-        from hermes_cli._subprocess_compat import expose_pm_git
-
         # The builds, the release-history refresh and the install stamp all run
-        # git; a fresh Windows machine has only PM's.
-        expose_pm_git(root)
+        # git. The re-exec's PM activation can put a broken managed Git ahead
+        # of the updater parent's selected Git, so select again here.
+        _expose_working_git(root)
     except Exception as exc:
         print(f"⚠ Could not provide git for the source completion: {exc}", file=sys.stderr)
     owed: list[tuple[str, str]] = []
