@@ -141,6 +141,49 @@ def test_kanban_dispatch_blocked_when_engaged(hermes_home):
     assert _kanban_dispatch_allowed() is True
 
 
+def test_office_pause_keeps_cron_and_kanban_stopped_but_allows_new_turns(
+    hermes_home, monkeypatch,
+):
+    from cron import scheduler
+    from gateway.kanban_watchers_common import _kanban_dispatch_allowed
+
+    due_scans = []
+    monkeypatch.setattr(scheduler, "get_due_jobs", lambda: due_scans.append(1) or [])
+
+    estop.engage(reason="incident")
+    estop.office_engage(reason="review window")
+    assert estop.paused_reply() is not None
+    assert scheduler.tick(verbose=False) == 0
+    assert _kanban_dispatch_allowed() is False
+
+    assert estop.disengage() is True
+    assert estop.office_is_engaged() is True
+    assert estop.paused_reply() is None
+    assert scheduler.tick(verbose=False) == 0
+    assert due_scans == []
+    assert _kanban_dispatch_allowed() is False
+
+    assert estop.office_disengage() is True
+    assert scheduler.tick(verbose=False) == 0
+    assert due_scans == [1]
+    assert _kanban_dispatch_allowed() is True
+
+
+def test_office_pause_is_fleet_scoped_and_does_not_remove_estop(tmp_path, monkeypatch):
+    root = tmp_path / "hermes-root"
+    profile = root / "profiles" / "analyst"
+    profile.mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(profile))
+    estop.engage(reason="global")
+
+    assert estop.office_engage().parent == root
+    assert estop.office_is_engaged() is True
+    assert estop.office_disengage() is True
+    assert estop.is_engaged() is True
+    assert estop.paused_reply() is not None
+    assert estop.office_is_engaged() is False
+
+
 # ── gateway turn-start integration ──────────────────────────────────────────
 
 
@@ -227,6 +270,19 @@ def test_cli_resume_disengages(hermes_home, capsys):
     assert "resumed" in capsys.readouterr().out.lower()
 
 
+def test_cli_office_pause_and_global_resume_are_independent(hermes_home, capsys):
+    from hermes_cli.subcommands.pause import cmd_pause, cmd_resume
+
+    assert cmd_pause(argparse.Namespace(reason="incident", office_only=False)) == 0
+    assert cmd_pause(argparse.Namespace(reason="review", office_only=True)) == 0
+    assert cmd_resume(argparse.Namespace(office_only=False)) == 0
+    assert estop.is_engaged() is False
+    assert estop.office_is_engaged() is True
+    assert "office dispatch remains paused" in capsys.readouterr().out.lower()
+    assert cmd_resume(argparse.Namespace(office_only=True)) == 0
+    assert estop.office_is_engaged() is False
+
+
 
 
 
@@ -244,6 +300,20 @@ def test_status_line_when_paused(hermes_home):
     assert "paused" in line.lower()
     assert "ops" in line
     estop.disengage()
+    assert _estop_status_line() is None
+
+
+def test_status_distinguishes_office_pause_from_global_estop(hermes_home):
+    from hermes_cli.status import _estop_status_line
+
+    estop.office_engage(reason="review")
+    assert "OFFICE DISPATCH PAUSED" in _estop_status_line()
+    assert "interactive turns available" in _estop_status_line()
+    estop.engage()
+    assert "Office dispatch pause also engaged" in _estop_status_line()
+    estop.disengage()
+    assert "OFFICE DISPATCH PAUSED" in _estop_status_line()
+    estop.office_disengage()
     assert _estop_status_line() is None
 
 

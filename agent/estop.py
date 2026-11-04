@@ -1,4 +1,4 @@
-"""Global emergency stop (ESTOP) — a resumable pause for NEW work only.
+"""Global emergency stop (ESTOP) and fleet-wide automatic Office pause.
 
 ``hermes pause`` writes a sentinel at ``$HERMES_HOME/ESTOP``; ``hermes resume``
 removes it. While it exists the cron scheduler, kanban dispatcher and new gateway
@@ -6,6 +6,8 @@ turns skip work; in-flight work is never killed. The check is one or two uncache
 ``os.stat`` calls (process home + fleet root when they differ). The body is optional
 JSON ``{"reason", "engaged_at"}``; a corrupt/empty file still counts as engaged
 (fail safe, e.g. ``touch ~/.hermes/ESTOP``). Ported from gastownhall/gastown estop.go (MIT).
+``OFFICE_PAUSE`` holds automatic dispatch through ``check_paused`` while leaving
+new interactive turns available. It never replaces the global ESTOP sentinel.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from typing import Optional
 from agent.file_safety import _hermes_home_path as _hermes_home, _hermes_root_path as _canonical_root
 
 SENTINEL_NAME = "ESTOP"
+OFFICE_SENTINEL_NAME = "OFFICE_PAUSE"
 
 # Per-component "logged already for this engagement" flags: log once per engagement, not per tick.
 _log_lock = threading.Lock()
@@ -31,6 +34,41 @@ _logged_components: set[str] = set()
 def sentinel_path() -> Path:
     """Path of the ESTOP sentinel this process would write on `hermes pause`."""
     return _hermes_home() / SENTINEL_NAME
+
+
+def office_sentinel_path() -> Path:
+    """Fleet-wide pause for automatic Office dispatch, independent of interactive turns."""
+    return _canonical_root() / OFFICE_SENTINEL_NAME
+
+
+def office_is_engaged() -> bool:
+    """A missing or unreadable Office sentinel must never permit automatic work."""
+    try:
+        return office_sentinel_path().exists()
+    except OSError:
+        return True
+
+
+def office_engage(reason: Optional[str] = None) -> Path:
+    """Hold automatic Office work without blocking a new interactive Main turn."""
+    path = office_sentinel_path()
+    payload = {"engaged_at": datetime.now(UTC).isoformat(), "reason": reason or None}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        with suppress(OSError):
+            path.touch(exist_ok=True)
+    return path
+
+
+def office_disengage() -> bool:
+    """Lift only the Office pause; never remove another operator's global ESTOP."""
+    try:
+        office_sentinel_path().unlink()
+        return True
+    except OSError:
+        return False
 
 
 def _candidate_sentinel_paths() -> list:
@@ -120,8 +158,10 @@ def paused_reply() -> Optional[str]:
 
 
 def check_paused(component: str, logger: logging.Logger) -> bool:
-    """Return True when engaged, logging once per engagement per component (re-armed after a resume)."""
-    if not is_engaged():
+    """Hold automatic work for either sentinel; re-arm logging after both lift."""
+    global_paused = is_engaged()
+    office_paused = office_is_engaged()
+    if not (global_paused or office_paused):
         with _log_lock:
             _logged_components.discard(component)
         return False
@@ -129,10 +169,13 @@ def check_paused(component: str, logger: logging.Logger) -> bool:
         first = component not in _logged_components
         _logged_components.add(component)
     if first:
-        reason = (get_state() or {}).get("reason")
+        reason = (get_state() or {}).get("reason") if global_paused else None
         suffix = f" (reason: {reason})" if reason else ""
+        scope = "global emergency stop" if global_paused else "Office dispatch pause"
+        command = "hermes resume" if global_paused else "hermes resume --office-only"
+        path = sentinel_path() if global_paused else office_sentinel_path()
         logger.info(
-            "%s dispatch paused by global emergency stop%s — remove with `hermes resume` (%s)",
-            component, suffix, sentinel_path(),
+            "%s dispatch paused by %s%s — remove with `%s` (%s)",
+            component, scope, suffix, command, path,
         )
     return True

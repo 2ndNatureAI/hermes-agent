@@ -93,14 +93,17 @@ def _effective_provider_label() -> str:
 def _estop_status_line():
     """One-line pause banner for `hermes status`, or None when not paused."""
     try:
-        from agent.estop import get_state
+        from agent.estop import get_state, office_is_engaged
     except ImportError:
         return None
     state = get_state()
     if state is None:
+        if office_is_engaged():
+            return "⏸️  OFFICE DISPATCH PAUSED (`hermes resume --office-only` to lift; interactive turns available)"
         return None
     reason = state.get("reason")
-    return f"⏸️  PAUSED (global emergency stop{f' — reason: {reason}' if reason else ''}; `hermes resume` to lift)"
+    office = "; Office dispatch pause also engaged" if office_is_engaged() else ""
+    return f"⏸️  PAUSED (global emergency stop{f' — reason: {reason}' if reason else ''}{office}; `hermes resume` to lift)"
 
 
 # --- Data tables driving the per-section renderers -------------------------
