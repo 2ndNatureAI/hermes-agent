@@ -354,6 +354,11 @@ _SPECS = [
         _arg("--dry-run", action="store_true", help="Validate the promotion without mutating state"),
         _arg("--json", dest="json", action="store_true", help="Emit machine-readable JSON result"),
     ], help="Manually move one or more todo/blocked tasks to ready (recovery path)"),
+    _cmd("retire", [
+        _TASK_ID,
+        _arg("--expected-status", required=True, choices=sorted(kb.VALID_STATUSES), help="Status observed before retirement"),
+        _arg("--reason", required=True, help="Reason recorded in task history"),
+    ], help="Hide one idle unfinished task without deleting it"),
     _cmd("archive", [
         _arg("task_ids", nargs="*", help="Task ids to archive (default mode)"),
         _arg("--rm", dest="purge_ids", nargs="+",

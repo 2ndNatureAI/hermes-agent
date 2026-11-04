@@ -11,6 +11,7 @@ import contextlib
 import json
 import os
 import shlex
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -153,6 +154,9 @@ def kanban_command(args: argparse.Namespace) -> int:
     if _is_delegated_child_cli_mutation(args):
         return _err("kanban: delegate_task child contexts cannot mutate Kanban tasks via the CLI")
 
+    if action == "retire" and not (getattr(args, "board", None) or "").strip():
+        return _err("kanban: retire requires an explicit --board slug", 2)
+
     # `boards …` manages board metadata and the current-board pointer itself, so it must ignore
     # the `--board` routing override (else `--board beta boards show` reports beta).
     if action == "boards":
@@ -208,7 +212,7 @@ def _profile_author() -> str:
 _DELEGATED_CHILD_DENIED_ACTIONS: frozenset[str] = frozenset({
     "init", "create", "swarm", "assign", "reclaim", "reassign", "link", "unlink",
     "claim", "comment", "attach", "attach-rm", "complete", "edit", "block",
-    "schedule", "unblock", "promote", "archive", "dispatch", "daemon", "repair",
+    "schedule", "unblock", "promote", "archive", "retire", "dispatch", "daemon", "repair",
     "heartbeat", "notify-subscribe", "notify-unsubscribe", "specify", "decompose",
     "request-review", "request-changes", "reopen-review",
     "gc",
@@ -1119,6 +1123,21 @@ def _cmd_promote(args: argparse.Namespace) -> int:
     return 0 if not failed else 1
 
 
+def _cmd_retire(args: argparse.Namespace) -> int:
+    if not (getattr(args, "board", None) or "").strip():
+        return _err("kanban: retire requires an explicit --board slug", 2)
+    try:
+        with kbc.connect_closing() as conn:
+            changed = kb.retire_task(conn, args.task_id, reason=args.reason, actor=_profile_author(),
+                                     expected_status=args.expected_status)
+    except sqlite3.OperationalError as exc:
+        return _err(f"kanban: cannot retire {args.task_id}: database or owner lock: {exc}")
+    if not changed:
+        return _err(f"kanban: {args.task_id} is already retired")
+    print(f"Retired {args.task_id}; retirement event recorded in task history")
+    return 0
+
+
 def _cmd_archive(args: argparse.Namespace) -> int:
     ids = list(args.task_ids or [])
     purge_ids = list(getattr(args, "purge_ids", None) or [])
@@ -1330,7 +1349,7 @@ _HANDLERS = {
     "schedule": _cmd_schedule, "unblock": _cmd_unblock,
     "request-review": _cmd_request_review, "request-changes": _cmd_request_changes,
     "reopen-review": _cmd_reopen_review, "promote": _cmd_promote,
-    "archive": _cmd_archive, "tail": _cmd_tail, "dispatch": _cmd_dispatch,
+    "archive": _cmd_archive, "retire": _cmd_retire, "tail": _cmd_tail, "dispatch": _cmd_dispatch,
     "daemon": _cmd_daemon, "watch": _cmd_watch, "stats": _cmd_stats,
     "log": _cmd_log, "runs": _cmd_runs, "heartbeat": _cmd_heartbeat,
     "assignees": _cmd_assignees, "notify-subscribe": _cmd_notify_subscribe,

@@ -26,7 +26,7 @@ from typing import Any, Callable, Iterator, Optional
 from fastapi import (
     APIRouter, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status as http_status)
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 
 from hermes_cli import kanban_db
 from hermes_cli import kanban_workflow
@@ -103,7 +103,12 @@ def _board_conn(board: Optional[str]) -> Iterator[tuple[Optional[str], sqlite3.C
     """Resolve the ``board`` query param, open a connection, close it on exit."""
     board = _resolve_board(board)
     with closing(_conn(board=board)) as conn:
-        yield board, conn
+        try:
+            yield board, conn
+        except sqlite3.IntegrityError as exc:
+            if str(exc) in ("retired task must be restored before editing", "retired task must be restored before deletion", "restore retired task before changing links"):
+                raise HTTPException(status_code=409, detail="Restore the retired task before changing it") from exc
+            raise
 
 
 def _with_board_pinned(board: Optional[str], fn: Callable[[], Any]) -> Any:
@@ -373,6 +378,32 @@ async def get_board_endpoint(
         current_step_key=current_step_key,
     )
 
+
+@router.get("/retirements")
+def list_retirements(board: Optional[str] = Query(None), tenant: Optional[str] = Query(None)):
+    with _board_conn(board) as (_, conn):
+        return {"tasks": kanban_db.list_retired_tasks(conn, tenant=tenant)}
+
+class RestoreRetirementBody(BaseModel):
+    expected_status: str
+    acknowledge_dispatch: StrictBool = False
+    tenant: Optional[str] = None
+
+@router.post("/retirements/{task_id}/restore")
+def restore_retirement(task_id: str, payload: RestoreRetirementBody, board: Optional[str] = Query(None)):
+    with _board_conn(board) as (_, conn):
+        try:
+            restored = kanban_db.restore_retired_task(conn, task_id, actor="dashboard", expected_status=payload.expected_status,
+                                                      acknowledge_dispatch=payload.acknowledge_dispatch, tenant=payload.tenant)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if not restored:
+            raise HTTPException(status_code=404, detail="retired task not found")
+        return {"restored": True, "task_id": task_id}
+
+def _require_unretired(conn, task_id):
+    if conn.execute("SELECT 1 FROM task_retirements WHERE task_id = ?", (task_id,)).fetchone():
+        raise HTTPException(status_code=409, detail="Restore the retired task before changing it")
 
 # --- GET /tasks/:id ---------------------------------------------------------
 
@@ -692,6 +723,7 @@ def _patch_title_body(conn, task_id: str, payload: UpdateTaskBody, board: Option
 @router.patch("/tasks/{task_id}")
 def update_task(task_id: str, payload: UpdateTaskBody, board: Optional[str] = Query(None)):
     with _board_conn(board) as (board, conn):
+        _require_unretired(conn, task_id)
         _require_task(conn, task_id)
         # For a combined assignee+review patch, request_review must capture the
         # current implementer before the task is routed to the reviewer.
@@ -719,6 +751,7 @@ def update_task(task_id: str, payload: UpdateTaskBody, board: Optional[str] = Qu
 @router.delete("/tasks/{task_id}")
 def delete_task(task_id: str, board: Optional[str] = Query(None)):
     with _board_conn(board) as (board, conn):
+        _require_unretired(conn, task_id)
         if not kanban_db.delete_task(conn, task_id):
             raise HTTPException(status_code=404, detail=f"task {task_id} not found")
         return {"deleted": True, "task_id": task_id}
@@ -869,6 +902,8 @@ def bulk_update(payload: BulkTaskBody, board: Optional[str] = Query(None)):
             try:
                 if kanban_db.get_task(conn, tid) is None:
                     entry.update(ok=False, error="not found")
+                elif conn.execute("SELECT 1 FROM task_retirements WHERE task_id = ?", (tid,)).fetchone():
+                    entry.update(ok=False, error="Restore the retired task before changing it")
                 else:
                     _bulk_apply_one(conn, tid, payload, board, entry)
             except Exception as e:  # one bad id shouldn't kill the batch (incl. _StatusRejected)
@@ -1372,7 +1407,7 @@ def _board_counts(slug: str) -> dict[str, int]:
         if not kanban_db.kanban_db_path(board=slug).exists():
             return {}
         with closing(kbc.connect(board=slug)) as conn:
-            rows = conn.execute("SELECT status, COUNT(*) AS n FROM tasks GROUP BY status").fetchall()
+            rows = conn.execute("SELECT status, COUNT(*) AS n FROM tasks WHERE id NOT IN (SELECT task_id FROM task_retirements) GROUP BY status").fetchall()
             return {r["status"]: int(r["n"]) for r in rows}
     except Exception:
         return {}

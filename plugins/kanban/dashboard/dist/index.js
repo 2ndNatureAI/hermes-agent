@@ -1311,6 +1311,7 @@
           boardData,
           onOpen: setSelectedTaskId,
         }),
+        h(RetiredTasksPanel, { key: (board || "default") + ":" + tenantFilter, board, tenant: tenantFilter, onRestored: loadBoard, onError: setError }),
         h(BoardToolbar, {
           board: boardData,
           tenantFilter, setTenantFilter,
@@ -2539,6 +2540,47 @@
   // -------------------------------------------------------------------------
   // Toolbar
   // -------------------------------------------------------------------------
+
+  function RetiredTasksPanel(props) {
+    const [open, setOpen] = useState(false);
+    const [tasks, setTasks] = useState([]);
+    const [busy, setBusy] = useState(false);
+    const [acknowledged, setAcknowledged] = useState(false);
+    useEffect(function () { setOpen(false); setTasks([]); setAcknowledged(false); }, [props.board, props.tenant]);
+    function refresh() {
+      setBusy(true);
+      const query = props.tenant ? `?tenant=${encodeURIComponent(props.tenant)}` : "";
+      return SDK.fetchJSON(withBoard(`${API}/retirements${query}`, props.board))
+        .then(function (data) { setTasks(data.tasks || []); })
+        .catch(function (e) { props.onError(String(e.message || e)); })
+        .finally(function () { setBusy(false); });
+    }
+    function restore(task) {
+      setBusy(true);
+      return SDK.fetchJSON(withBoard(`${API}/retirements/${encodeURIComponent(task.id)}/restore`, props.board), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expected_status: task.status, acknowledge_dispatch: acknowledged, tenant: props.tenant || null })
+      })
+        .then(function () { return Promise.all([refresh(), props.onRestored()]); })
+        .catch(function (e) { props.onError(String(e.message || e)); })
+        .finally(function () { setBusy(false); });
+    }
+    return h("div", { className: "flex flex-col gap-2" },
+      h(Button, { size: "sm", disabled: busy, onClick: function () {
+        if (!open) refresh();
+        setOpen(!open);
+      } }, open ? "Hide retired tasks" : "Show retired tasks"),
+      open ? h("div", null,
+        h("div", null, "Restoring a ready task makes it eligible to run when dispatch is active."),
+        h("label", null, h("input", { type: "checkbox", checked: acknowledged, onChange: function (e) { setAcknowledged(e.target.checked); } }),
+          " I understand restored work may run when dispatch is active"),
+        busy ? h("div", null, "Loading...") : null,
+        !busy && !tasks.length ? h("div", null, "No retired tasks") : null,
+        tasks.map(function (task) { return h("div", { key: task.id, className: "flex items-center gap-2" },
+          h("span", null, task.title + " (" + task.status + ")"),
+          h(Button, { size: "sm", disabled: busy || !acknowledged, onClick: function () { restore(task); } }, "Restore")); })
+      ) : null);
+  }
 
   function BoardToolbar(props) {
     const { t } = useI18n();

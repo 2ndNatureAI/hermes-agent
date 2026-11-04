@@ -774,6 +774,11 @@ class Event:
 # --- Schema ---
 
 SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS task_retirements (
+    task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    retired_at INTEGER NOT NULL,
+    reason TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS tasks (
     id                   TEXT PRIMARY KEY,
     title                TEXT NOT NULL,
@@ -980,6 +985,22 @@ CREATE INDEX IF NOT EXISTS idx_runs_task             ON task_runs(task_id, start
 CREATE INDEX IF NOT EXISTS idx_runs_status           ON task_runs(status);
 CREATE INDEX IF NOT EXISTS idx_attachments_task      ON task_attachments(task_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_notify_task           ON kanban_notify_subs(task_id);
+CREATE TRIGGER IF NOT EXISTS retire_freeze_update BEFORE UPDATE ON tasks
+WHEN EXISTS (SELECT 1 FROM task_retirements WHERE task_id = OLD.id)
+BEGIN SELECT RAISE(ABORT, 'retired task must be restored before editing'); END;
+CREATE TRIGGER IF NOT EXISTS retire_freeze_delete BEFORE DELETE ON tasks
+WHEN EXISTS (SELECT 1 FROM task_retirements WHERE task_id = OLD.id)
+BEGIN SELECT RAISE(ABORT, 'retired task must be restored before deletion'); END;
+CREATE TRIGGER IF NOT EXISTS retire_freeze_link_insert BEFORE INSERT ON task_links
+WHEN EXISTS (SELECT 1 FROM task_retirements WHERE task_id IN (NEW.parent_id, NEW.child_id))
+BEGIN SELECT RAISE(ABORT, 'restore retired task before changing links'); END;
+CREATE TRIGGER IF NOT EXISTS retire_freeze_link_update BEFORE UPDATE ON task_links
+WHEN EXISTS (SELECT 1 FROM task_retirements WHERE task_id IN (OLD.parent_id, OLD.child_id, NEW.parent_id, NEW.child_id))
+BEGIN SELECT RAISE(ABORT, 'restore retired task before changing links'); END;
+CREATE TRIGGER IF NOT EXISTS retire_freeze_link_delete BEFORE DELETE ON task_links
+WHEN EXISTS (SELECT 1 FROM task_retirements WHERE task_id IN (OLD.parent_id, OLD.child_id))
+BEGIN SELECT RAISE(ABORT, 'restore retired task before changing links'); END;
+
 """
 
 
@@ -1494,11 +1515,14 @@ def list_tasks(
     tenant: Optional[str] = None, session_id: Optional[str] = None, include_archived: bool = False,
     limit: Optional[int] = None, order_by: Optional[str] = None,
     workflow_template_id: Optional[str] = None, current_step_key: Optional[str] = None,
+    include_retired: bool = False,
 ) -> list[Task]:
     if status is not None and status not in VALID_STATUSES:
         raise ValueError(f"status must be one of {sorted(VALID_STATUSES)}")
     query = "SELECT * FROM tasks WHERE 1=1"
     params: list[Any] = []
+    if not include_retired:
+        query += " AND id NOT IN (SELECT task_id FROM task_retirements)"
     for col, val in (
         ("assignee", _canonical_assignee(assignee)), ("status", status), ("tenant", tenant),
         ("session_id", session_id), ("workflow_template_id", workflow_template_id),
@@ -2137,7 +2161,7 @@ def recompute_ready(conn: sqlite3.Connection, failure_limit: int | None = None) 
     with write_txn(conn):
         todo_rows = conn.execute(
             "SELECT id, status, consecutive_failures, max_retries "
-            "FROM tasks WHERE status IN ('todo', 'blocked')"
+            "FROM tasks WHERE status IN ('todo', 'blocked') AND id NOT IN (SELECT task_id FROM task_retirements)"
         ).fetchall()
         for row in todo_rows:
             task_id = row["id"]
@@ -2223,6 +2247,7 @@ def _claim_and_open_run(
          WHERE id = ?
            AND status = '{source_status}'
            AND claim_lock IS NULL
+           AND id NOT IN (SELECT task_id FROM task_retirements)
         """,
         (lock, expires, now, task_id),
     )
@@ -2267,6 +2292,8 @@ def claim_task(
     lock = claimer or _claimer_id()
     expires = now + _resolve_claim_ttl_seconds(ttl_seconds)
     with write_txn(conn):
+        if conn.execute("SELECT 1 FROM task_retirements WHERE task_id = ?", (task_id,)).fetchone():
+            return None
         # Single enforcement point: never ready -> running with an undone
         # parent, whichever writer set 'ready'. Demote to 'todo';
         # recompute_ready re-promotes when the parents finish.
@@ -2300,6 +2327,8 @@ def claim_review_task(
     lock = claimer or _claimer_id()
     expires = now + _resolve_claim_ttl_seconds(ttl_seconds)
     with write_txn(conn):
+        if conn.execute("SELECT 1 FROM task_retirements WHERE task_id = ?", (task_id,)).fetchone():
+            return None
         if not _parents_satisfied(conn, task_id):
             demoted = conn.execute(
                 "UPDATE tasks SET status = 'todo' "
@@ -4035,14 +4064,14 @@ def board_stats(conn: sqlite3.Connection) -> dict:
     by_status: dict[str, int] = {}
     for row in conn.execute(
         "SELECT status, COUNT(*) AS n FROM tasks "
-        "WHERE status != 'archived' GROUP BY status"
+        "WHERE status != 'archived' AND id NOT IN (SELECT task_id FROM task_retirements) GROUP BY status"
     ):
         by_status[row["status"]] = int(row["n"])
 
     by_assignee = _counts_by_assignee(conn)
 
     oldest_row = conn.execute(
-        "SELECT MIN(created_at) AS ts FROM tasks WHERE status = 'ready'"
+        "SELECT MIN(created_at) AS ts FROM tasks WHERE status = 'ready' AND id NOT IN (SELECT task_id FROM task_retirements)"
     ).fetchone()
     now = int(time.time())
     oldest_ready_age = (
@@ -4063,7 +4092,7 @@ def _counts_by_assignee(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:
     counts: dict[str, dict[str, int]] = {}
     for row in conn.execute(
         "SELECT assignee, status, COUNT(*) AS n FROM tasks "
-        "WHERE status != 'archived' AND assignee IS NOT NULL "
+        "WHERE status != 'archived' AND assignee IS NOT NULL AND id NOT IN (SELECT task_id FROM task_retirements) "
         "GROUP BY assignee, status"
     ):
         counts.setdefault(row["assignee"], {})[row["status"]] = int(row["n"])
@@ -4340,3 +4369,5 @@ from hermes_cli.kanban_db_dispatch import (
     _worker_survived_termination,
     _worker_terminal_timeout_env,
 )
+
+from hermes_cli.kanban_retire import list_retired_tasks, retire_task, restore_retired_task
