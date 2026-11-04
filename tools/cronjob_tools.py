@@ -264,6 +264,10 @@ def _execute_job_now(job: dict[str, Any], extra_prompt: Optional[str] = None) ->
     """Run a job now, outside the scheduler tick: claim via ``claim_job_for_fire`` (the ticker's
     CAS, so a concurrent tick cannot double-fire and next_run_at advances), then fire through
     the shared ``run_one_job`` body. Returns {"claimed", "success", "error"}."""
+    from agent.estop import check_paused
+
+    if check_paused("cron-manual", logger):
+        return {"claimed": False, "success": False, "error": "Cron dispatch is paused"}
     claimed_job, err = _claim_for_manual_run(job["id"], "immediate run")
     return err if err is not None else _run_claimed_job(claimed_job, extra_prompt=extra_prompt)
 
@@ -416,17 +420,30 @@ def _run_claimed_job(job: dict[str, Any], extra_prompt: Optional[str] = None) ->
         running_future.set_result(None)
 
 
+def claim_job_for_event(job_ref: str) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
+    """Resolve and claim a webhook job before its HTTP 202 admission is returned."""
+    from agent.estop import check_paused
+
+    if check_paused("cron-webhook", logger):
+        return None, {"claimed": False, "success": False, "error": "Cron dispatch is paused"}
+    try:
+        job = resolve_job_ref(job_ref)
+    except AmbiguousJobReference as e:
+        return None, {"claimed": False, "success": False, "error": str(e)}
+    if job is None:
+        return None, {"claimed": False, "success": False, "error": f"Cron job '{job_ref}' not found."}
+    return _claim_for_manual_run(job["id"], "webhook event")
+
+
 def execute_job_for_event(
     job_ref: str, extra_prompt: Optional[str] = None
 ) -> dict[str, Any]:
     """Fire an existing cron job in response to an external event.
 
-    Public entry point for event-driven triggers (the webhook adapter's
-    ``cron_job`` routes). Resolves ``job_ref`` (ID or name) and
-    fires it through the exact same claimed-run body a manual
-    ``cronjob(action='run')`` uses, so at-most-once claiming, in-flight
-    dedupe, delivery, and ``[SILENT]`` handling stay identical across the
-    scheduler / manual / event paths.
+    Synchronous event-run helper. The webhook adapter calls ``claim_job_for_event``
+    before HTTP 202 and then runs that claimed snapshot in its background task;
+    this helper uses the same two steps for direct callers. At-most-once claiming,
+    delivery, and ``[SILENT]`` handling match manual runs.
 
     ``extra_prompt`` is injected as transient per-run context (the job's
     stored prompt is never mutated), exactly like ``action='run'`` with a
@@ -435,21 +452,8 @@ def execute_job_for_event(
     Returns the ``_execute_job_now`` result shape:
     ``{"claimed": bool, "success": bool, "error": str|None}``.
     """
-    from agent.estop import check_paused
-
-    if check_paused("cron-webhook", logger):
-        return {"claimed": False, "success": False, "error": "Cron dispatch is paused"}
-    try:
-        job = resolve_job_ref(job_ref)
-    except AmbiguousJobReference as e:
-        return {"claimed": False, "success": False, "error": str(e)}
-    if job is None:
-        return {
-            "claimed": False,
-            "success": False,
-            "error": f"Cron job '{job_ref}' not found.",
-        }
-    return _execute_job_now(job, extra_prompt=extra_prompt)
+    claimed_job, err = claim_job_for_event(job_ref)
+    return err if err is not None else _run_claimed_job(claimed_job, extra_prompt=extra_prompt)
 
 
 def _latest_job_output_excerpt(job_id: str, max_chars: int = 2000) -> Optional[str]:
@@ -792,6 +796,10 @@ def _refreshed_job_view(job_id: str) -> dict[str, Any]:
 
 
 def _action_run(job: dict[str, Any], a: dict[str, Any]) -> str:
+    from agent.estop import check_paused
+
+    if check_paused("cron-manual", logger):
+        return tool_error("Cron dispatch is paused", success=False)
     job_id = job["id"]
     # `prompt` on run is transient per-fire context appended to the stored prompt, never
     # persisted; same strict scan as stored prompts.

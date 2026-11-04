@@ -64,6 +64,44 @@ def test_held_lock_skips_the_tick_without_writes(conn):
     assert spawn_calls == [], "spawn_fn must not run while the tick is locked out"
 
 
+def test_office_pause_holds_one_shot_and_standalone_loop_without_writes(conn):
+    import threading
+    from agent import estop
+
+    kb.create_task(conn, title="held", assignee="forge")
+    before = conn.execute("SELECT COUNT(*) FROM task_events").fetchone()[0]
+    spawned = []
+    estop.office_engage(reason="review")
+    try:
+        result = kbd.dispatch_once(conn, spawn_fn=lambda *_args: spawned.append(1))
+        assert result.skipped_paused is True
+        assert "skipped_paused=1" in kbd.describe_suppression([result])
+        assert spawned == []
+        assert conn.execute("SELECT COUNT(*) FROM task_events").fetchone()[0] == before
+
+        stop = threading.Event()
+        seen = threading.Event()
+        ticks = []
+
+        def observed(tick):
+            ticks.append(tick)
+            seen.set()
+
+        daemon = threading.Thread(target=kbd.run_daemon, daemon=True,
+                                  kwargs={"interval": 30, "stop_event": stop, "on_tick": observed})
+        daemon.start()
+        try:
+            assert seen.wait(10), "standalone dispatcher did not report its first tick"
+        finally:
+            stop.set()
+            daemon.join(10)
+        assert not daemon.is_alive()
+        assert len(ticks) == 1 and ticks[0].skipped_paused is True
+        assert conn.execute("SELECT COUNT(*) FROM task_events").fetchone()[0] == before
+    finally:
+        estop.office_disengage()
+
+
 
 
 def test_lock_is_board_scoped(conn):

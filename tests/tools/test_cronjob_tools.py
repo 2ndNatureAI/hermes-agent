@@ -26,6 +26,65 @@ def test_event_cron_refuses_pause_before_resolving_job(tmp_path, monkeypatch):
         estop.office_disengage()
 
 
+@pytest.mark.parametrize("scope", ["office", "global"])
+def test_event_claim_refuses_pause_before_claiming_job(tmp_path, monkeypatch, scope):
+    from agent import estop
+    from tools import cronjob_tools
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(cronjob_tools, "resolve_job_ref",
+                        lambda _ref: pytest.fail("paused event must not resolve a job"))
+    monkeypatch.setattr(cronjob_tools, "_claim_for_manual_run",
+                        lambda *_args: pytest.fail("paused event must not claim a job"))
+    engage = estop.office_engage if scope == "office" else estop.engage
+    disengage = estop.office_disengage if scope == "office" else estop.disengage
+    engage(reason="review")
+    try:
+        claimed_job, error = cronjob_tools.claim_job_for_event("accepted")
+        assert claimed_job is None and error["error"] == "Cron dispatch is paused"
+    finally:
+        disengage()
+
+
+def test_event_claim_precedes_execution_without_running_job(tmp_path, monkeypatch):
+    from tools import cronjob_tools
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    calls = []
+    monkeypatch.setattr(cronjob_tools, "resolve_job_ref",
+                        lambda ref: calls.append(("resolve", ref)) or {"id": "job-id"})
+    monkeypatch.setattr(cronjob_tools, "_claim_for_manual_run",
+                        lambda job_id, label: (calls.append(("claim", job_id)) or {"id": job_id}, None))
+    monkeypatch.setattr(cronjob_tools, "_run_claimed_job",
+                        lambda *_args, **_kwargs: pytest.fail("claim helper started job body"))
+    job, error = cronjob_tools.claim_job_for_event("job-name")
+    assert error is None and job == {"id": "job-id"}
+    assert calls == [("resolve", "job-name"), ("claim", "job-id")]
+
+
+def test_manual_cron_run_refuses_pause_before_handoff_or_background(tmp_path, monkeypatch):
+    from agent import estop
+    from tools import cronjob_tools
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(cronjob_tools, "_hand_off_primary_routed_run",
+                        lambda *_args, **_kwargs: pytest.fail("paused run reached handoff"))
+    monkeypatch.setattr(cronjob_tools, "_try_dispatch_background_run",
+                        lambda *_args, **_kwargs: pytest.fail("paused run reached background"))
+    monkeypatch.setattr(cronjob_tools, "_claim_for_manual_run",
+                        lambda *_args, **_kwargs: pytest.fail("paused run reached claim"))
+    estop.office_engage(reason="review")
+    try:
+        result = json.loads(cronjob_tools._action_run({"id": "job"}, {"prompt": None, "session_id": None}))
+        assert result["success"] is False
+        assert "paused" in result["error"].lower()
+        assert cronjob_tools._execute_job_now({"id": "job"}) == {
+            "claimed": False, "success": False, "error": "Cron dispatch is paused",
+        }
+    finally:
+        estop.office_disengage()
+
+
 # =========================================================================
 # Cron prompt scanning
 # =========================================================================

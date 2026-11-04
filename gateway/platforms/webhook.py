@@ -593,30 +593,39 @@ class WebhookAdapter(BasePlatformAdapter):
                        delivery["deliver"], result.error)
         return web.json_response(failed, status=502)
 
-    def _handle_cron_trigger(self, prompt: str, route_config: dict, route_name: str, event_type: str,
-                             delivery_id: str, profile: Optional[str] = None) -> web.Response:
+    async def _handle_cron_trigger(self, prompt: str, route_config: dict, route_name: str, event_type: str,
+                                   delivery_id: str, now: float, profile: Optional[str] = None) -> web.Response:
         """cron_job: fire an EXISTING cron job on this event instead of starting a webhook agent session.
         The rendered prompt is transient per-run context (same rail as ``cronjob(action='run', prompt=...)``);
         the job's own prompt, skills, model and delivery apply. Same auth/rate-limit/filter/script/idempotency
-        pipeline as agent routes; 202 immediately, the run happens on a worker thread."""
+        pipeline as agent routes; claim before HTTP 202, then run on a worker thread."""
         job_ref = str(route_config["cron_job"])
         event_context = (f"This run was triggered by webhook event '{event_type}' on route '{route_name}' "
                          f"(not the schedule).\n\n{prompt}")
+        identity = _WebhookDeliveryIdentity.from_parts(profile, route_name, delivery_id)
+        seen_at = self._seen_deliveries.get(identity)
+        if seen_at is not None and now - seen_at < self._idempotency_ttl:
+            return web.json_response({"status": "duplicate", "delivery_id": delivery_id}, status=200)
+        from tools.cronjob_tools import claim_job_for_event
+        with self._profile_scope(profile):
+            claimed_job, error = await asyncio.to_thread(claim_job_for_event, job_ref)
+        if error is not None:
+            logger.warning("[webhook] cron-trigger job=%s route=%s claim refused: %s",
+                           job_ref, route_name, error.get("error"))
+            return web.json_response({"status": "unavailable", "delivery_id": delivery_id}, status=503)
+        self._record_delivery_id(identity, now)
         logger.info("[webhook] cron-trigger event=%s route=%s job=%s delivery=%s", event_type, route_name, job_ref,
                     delivery_id)
 
         async def _fire_cron_job() -> None:
             try:
-                from tools.cronjob_tools import execute_job_for_event
+                from tools.cronjob_tools import _run_claimed_job
                 # The job store (cron/jobs.json) and the run belong to the ROUTED profile, not the gateway's
                 # default home; to_thread copies contextvars so the scope follows. A cron job is a full agent
                 # run (minutes) — keep it off the gateway event loop.
                 with self._profile_scope(profile):
-                    result = await asyncio.to_thread(execute_job_for_event, job_ref, event_context)
-                if result.get("error") == "Cron dispatch is paused":
-                    # The pause began after the edge accepted this delivery. Permit a later retry.
-                    self._seen_deliveries.pop(
-                        _WebhookDeliveryIdentity.from_parts(profile, route_name, delivery_id), None)
+                    result = await asyncio.to_thread(
+                        _run_claimed_job, claimed_job, extra_prompt=event_context)
                 if not result.get("success"):
                     logger.warning("[webhook] cron-trigger job=%s route=%s did not complete cleanly: %s", job_ref,
                                    route_name, result.get("error"))
@@ -735,13 +744,13 @@ class WebhookAdapter(BasePlatformAdapter):
         # deliver_only, cron_job and coalesced events act before (or without) a durable admission, so
         # the ledger cannot dedupe a provider retry or a replayed signed delivery; the route-scoped
         # in-memory guard is their only replay defence (main dedupes every route here).
-        non_durable = bool(route_config.get("deliver_only") or route_config.get("cron_job")
-                           or isinstance(coalesce, dict))
+        non_durable = bool(route_config.get("deliver_only") or isinstance(coalesce, dict))
         if non_durable and not self._record_delivery_id(delivery_identity, now):
             logger.info("[webhook] Skipping duplicate delivery %s on route %s", delivery_id, route_name)
             return web.json_response({"status": "duplicate", "delivery_id": delivery_id}, status=200)
         if route_config.get("cron_job"):
-            return self._handle_cron_trigger(prompt, route_config, route_name, event_type, delivery_id, profile)
+            return await self._handle_cron_trigger(prompt, route_config, route_name, event_type, delivery_id,
+                                                   now, profile)
         if route_config.get("deliver_only"):
             return await self._handle_deliver_only(prompt, payload, route_config, route_name, event_type, delivery_id,
                                                    profile)

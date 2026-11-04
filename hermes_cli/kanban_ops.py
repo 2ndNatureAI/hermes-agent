@@ -112,6 +112,7 @@ def _cmd_dispatch(args: argparse.Namespace) -> int:
             ],
             "rate_limited": res.rate_limited,
             "skipped_locked": res.skipped_locked,
+            "skipped_paused": res.skipped_paused,
             "memory_pressure": res.memory_pressure,
         }, ascii=True)
         return 0
@@ -152,6 +153,8 @@ def _cmd_dispatch(args: argparse.Namespace) -> int:
         print(f"Rate-limited (released to ready, no failure counted): {', '.join(res.rate_limited)}")
     if res.skipped_locked:
         print("Skipped: another dispatcher holds this board's lock (no writes this tick)")
+    if res.skipped_paused:
+        print("Skipped: Office dispatch is paused (no writes this tick)")
     if res.memory_pressure:
         print(f"Memory pressure {res.memory_pressure}: new workers restricted this tick")
     return 0

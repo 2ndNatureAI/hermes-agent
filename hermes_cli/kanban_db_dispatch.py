@@ -146,6 +146,8 @@ class DispatchResult:
     skipped_locked: bool = False
     """True when another process held the board's dispatch lock: this tick did
     no DB writes; the lock holder is making progress on the same board."""
+    skipped_paused: bool = False
+    """True when the fleet pause held this tick before any board read or write."""
     memory_pressure: Optional[str] = None
     """Memory pressure that restricted this tick: ``"critical"`` (no new
     workers), ``"elevated"`` (at most one), ``None`` (no restriction).
@@ -173,6 +175,8 @@ def describe_suppression(results: Iterable[Optional[DispatchResult]]) -> str:
             counts["rate_limited"] = counts.get("rate_limited", 0) + len(res.rate_limited)
         if res.skipped_locked:
             counts["skipped_locked"] = counts.get("skipped_locked", 0) + 1
+        if res.skipped_paused:
+            counts["skipped_paused"] = counts.get("skipped_paused", 0) + 1
         if res.memory_pressure:
             pressure = res.memory_pressure
     parts = [f"{k}={v}" for k, v in sorted(counts.items())]
@@ -2064,6 +2068,13 @@ def dispatch_once(
     ``skipped_locked=True`` and writes nothing; the lock is keyed on the
     resolved DB path so unrelated boards tick in parallel.
     """
+    from agent.estop import check_paused
+
+    if check_paused("kanban", logging.getLogger(__name__)):
+        result = DispatchResult(skipped_paused=True)
+        _kb._fire_dispatch_tick_hook(result, board=board, dry_run=dry_run)
+        return result
+
     def _locked_tick() -> DispatchResult:
         return _dispatch_once_locked(
             conn,
