@@ -10,7 +10,8 @@ import threading
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional
-from tools.mcp_tool_common import _parse_boolish, _core, _resolve_tool_timeout, mcp_field, mcp_server_enabled
+from tools.mcp_tool_common import (
+    _get_lifecycle_seconds, _parse_boolish, _core, _resolve_tool_timeout, mcp_field, mcp_server_enabled)
 from tools import mcp_tool_config as _config
 from tools import mcp_tool_events as _events
 from tools import mcp_tool_handlers as _handlers
@@ -520,6 +521,9 @@ def _same_server_route(server: Any, config: dict, *, cross_profile: bool = False
         return False
     if not cross_profile:
         return True
+    owner_idle = getattr(server, "_idle_timeout_seconds", _get_lifecycle_seconds(server._config, "idle_timeout_seconds"))
+    if owner_idle != _get_lifecycle_seconds(config, "idle_timeout_seconds"):
+        return False
     # Identities match, so both sides carry the same normalised auth type.
     recorded = getattr(server, "_resolved_identity", None)
     return (_auth_type(config) != "oauth" and recorded is not None

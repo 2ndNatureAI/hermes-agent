@@ -696,8 +696,8 @@ def reconcile_mcp_servers_with_config() -> dict[str, list[str]]:
                     still_owned = (_core._servers.get(key) is server
                                    and _core._server_scope_keys.get(key) == scope
                                    and not (_core._server_tool_scopes.get(key, set()) - {scope}))
-                if still_owned and server.update_idle_timeout(seconds):
-                    updated.append(_key_name(key))
+                    if still_owned and server.update_idle_timeout(seconds):
+                        updated.append(_key_name(key))
             return updated
 
         for name in _loop._run_on_mcp_loop(_apply_idle_updates, timeout=5):

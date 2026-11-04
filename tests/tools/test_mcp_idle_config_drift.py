@@ -1,6 +1,7 @@
 """A live stdio MCP idle limit follows its owner's config without tearing down calls."""
 
 import asyncio
+import threading
 import time
 from unittest.mock import patch
 
@@ -68,6 +69,24 @@ def test_reconcile_updates_only_unshared_owner_connection(monkeypatch, tmp_path)
         return asyncio.run(factory())
 
     monkeypatch.setattr(loop, "_run_on_mcp_loop", run_on_loop)
+    original_update = MCPServerTask.update_idle_timeout
+
+    def update_with_lock_probe(self, seconds):
+        acquired = []
+
+        def competing_adopter():
+            got = core._lock.acquire(blocking=False)
+            acquired.append(got)
+            if got:
+                core._lock.release()
+
+        contender = threading.Thread(target=competing_adopter)
+        contender.start()
+        contender.join(timeout=2)
+        assert acquired == [False], "adoption must serialize with the idle update"
+        return original_update(self, seconds)
+
+    monkeypatch.setattr(MCPServerTask, "update_idle_timeout", update_with_lock_probe)
     with core._lock:
         core._servers[("A", "fetch")] = own
         core._server_scope_keys[("A", "fetch")] = "A"
@@ -94,3 +113,17 @@ def test_reconcile_updates_only_unshared_owner_connection(monkeypatch, tmp_path)
                 core._servers.pop(key, None)
                 core._server_scope_keys.pop(key, None)
                 core._server_tool_scopes.pop(key, None)
+
+
+def test_later_adopter_must_match_live_owner_idle_limit():
+    from types import SimpleNamespace
+    from tools.mcp_tool_registration import _same_server_route
+
+    owner_config = {"command": "uvx", "args": ["mcp-server-fetch"]}
+    owner = SimpleNamespace(_config=owner_config, _idle_timeout_seconds=900,
+                            _resolved_identity="same")
+    assert not _same_server_route(owner, dict(owner_config), cross_profile=True,
+                                  resolved_identity="same")
+    adopter_config = {**owner_config, "idle_timeout_seconds": 900}
+    assert _same_server_route(owner, adopter_config, cross_profile=True,
+                              resolved_identity="same")
