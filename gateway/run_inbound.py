@@ -249,17 +249,19 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             return None
         return event, source, False
 
-    def _hm_estop_turn_allowed(self, event: MessageEvent, source: SessionSource) -> bool:
+    def _hm_estop_turn_allowed(self, event: MessageEvent, source: SessionSource,
+                               *, allow_commands: bool = True) -> bool:
         """Whether a turn may bypass the global emergency stop: pause blocks NEW agent turns, never
         running work or control traffic — recognized slash commands (incl. /pause off, the in-band
         resume) and replies owned by in-flight work (pending update prompt, running session,
         pending slash-confirm, dangerous-command approval) all pass through."""
-        with suppress(Exception):
-            _estop_cmd = event.get_command()
-            if _estop_cmd:
-                from hermes_cli.commands import resolve_command as _resolve_estop_cmd
-                if _resolve_estop_cmd(_estop_cmd) is not None:
-                    return True
+        if allow_commands:
+            with suppress(Exception):
+                _estop_cmd = event.get_command()
+                if _estop_cmd:
+                    from hermes_cli.commands import resolve_command as _resolve_estop_cmd
+                    if _resolve_estop_cmd(_estop_cmd) is not None:
+                        return True
         with suppress(Exception):
             _estop_key = self._session_key_for_source(source)
             _estop_state = self._peek_session_state(_estop_key)
@@ -290,17 +292,27 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         except ImportError:
             return None
         _paused_notice = _estop_paused_reply()
-        if _paused_notice is None or self._hm_estop_turn_allowed(event, source):
-            return None
-        if getattr(event, "_heartbeat_session_id", None):
-            logger.debug("Heartbeat turn dropped by global emergency stop")
-            return ""
-        logger.info(
-            "Gateway turn paused by global emergency stop (platform=%s chat=%s)",
-            getattr(getattr(source, "platform", None), "value", "unknown"),
-            getattr(source, "chat_id", None) or "unknown",
-        )
-        return _paused_notice
+        if _paused_notice is not None:
+            if self._hm_estop_turn_allowed(event, source):
+                return None
+            if getattr(event, "_heartbeat_session_id", None):
+                logger.debug("Heartbeat turn dropped by global emergency stop")
+                return ""
+            logger.info(
+                "Gateway turn paused by global emergency stop (platform=%s chat=%s)",
+                getattr(getattr(source, "platform", None), "value", "unknown"),
+                getattr(source, "chat_id", None) or "unknown",
+            )
+            return _paused_notice
+        from agent.estop import office_is_engaged
+        from hermes_constants import profile_name_for_home
+
+        if (office_is_engaged()
+                and profile_name_for_home(self._resolve_profile_home_for_source(source)) != "default"
+                and not self._hm_estop_turn_allowed(event, source, allow_commands=False)):
+            logger.info("Gateway turn paused for Office profile %s", getattr(source, "profile", None))
+            return "⏸️ Office work is paused. New turns for this profile are on hold."
+        return None
 
     @staticmethod
     def _hm_write_update_response(response_text: str) -> Optional[str]:

@@ -1081,12 +1081,18 @@ class SessionAuthority:
             if any(row['status'] == 'unknown' for row in pending):
                 raise RuntimeStoreError('unknown_execution')
             first = next((row for row in pending if row['status'] == 'queued'), None)
-            if first is not None and first['principal_id'].startswith('automation:'):
-                from agent.estop import check_paused
-
-                if check_paused('automation', logging.getLogger(__name__)):
-                    raise RuntimeStoreError('office_paused')
             from gateway.config import Platform
+            if first is not None:
+                from agent.estop import check_paused, office_is_engaged
+                from hermes_constants import profile_name_for_home
+
+                if first['principal_id'].startswith('automation:') and check_paused(
+                        'automation', logging.getLogger(__name__)):
+                    raise RuntimeStoreError('office_paused')
+                if office_is_engaged() and (
+                        (self.profile_id != 'default' and profile_name_for_home(self.profile_id) != 'default')
+                        or live.source.platform == Platform.WEBHOOK):
+                    raise RuntimeStoreError('office_paused')
             if live.source.platform == Platform.LOCAL:
                 # A reasoning command or a model pick made while the previous turn ran lands here, at the
                 # turn boundary.
