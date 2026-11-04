@@ -575,6 +575,10 @@ def delegate_task(
             "Delegation spawning is paused. Clear the pause via the TUI "
             "(`p` in /agents) or the `delegation.pause` RPC before retrying."
         )
+    from agent.estop import check_paused
+
+    if check_paused("delegation", logger):
+        return tool_error("Delegation spawning is paused by the global or Office stop.")
 
     top_role = _normalize_role(role)
     # background applies to single tasks AND batches: a batch is ONE async unit
