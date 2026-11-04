@@ -114,7 +114,7 @@ describe('windowsGitCandidates (#61494)', () => {
     const candidates = windowsGitCandidates(env, fs)
 
     assert.equal(candidates.find(fs.existsSync), managed)
-    assert.equal(resolveWindowsGitBinary(env, fs, () => true), managed)
+    assert.equal(resolveWindowsGitBinary(env, fs, () => true, []), managed)
   })
 
   test('skips a present managed Git that cannot launch and uses the working system Git', () => {
@@ -122,9 +122,18 @@ describe('windowsGitCandidates (#61494)', () => {
     const system = path.join(env.programFiles, 'Git', 'cmd', 'git.exe')
     const fs = fakeFs({ [path.join(LAD, 'hermes', 'tools')]: ['git-2.53.0+3-win32-x64'] }, [managed, system])
 
-    const selected = resolveWindowsGitBinary(env, fs, candidate => candidate === system)
+    const selected = resolveWindowsGitBinary(env, fs, candidate => candidate === system, [])
 
     assert.equal(selected, system)
+  })
+
+  test('uses working PATH Git after denied fixed candidates', () => {
+    const managed = path.join(LAD, 'hermes', 'tools', 'git-2.53.0+3-win32-x64', 'cmd', 'git.exe')
+    const pathGit = path.join(LAD, 'custom-git', 'git.exe')
+    const fs = fakeFs({ [path.join(LAD, 'hermes', 'tools')]: ['git-2.53.0+3-win32-x64'] }, [managed, pathGit])
+
+    assert.equal(resolveWindowsGitBinary(env, fs, candidate => candidate === pathGit, [pathGit]), pathGit)
+    assert.equal(resolveWindowsGitBinary(env, fs, () => false, [pathGit]), managed)
   })
 
   test('still prefers the hermes-bundled portable git over UGit', () => {

@@ -3241,7 +3241,8 @@ function resolveGitBinary() {
       programFilesX86: process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)'
     },
     { existsSync: fileExists, readdirSync: dir => fs.readdirSync(dir) },
-    binaryRuns
+    binaryRuns,
+    findPathCandidates('git.exe')
   ) || findOnPath('git') || 'git'
 
   return _gitBinaryCache

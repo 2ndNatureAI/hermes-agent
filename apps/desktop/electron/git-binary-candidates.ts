@@ -109,10 +109,11 @@ export function windowsGitCandidates(env: WindowsGitEnv, fs: GitCandidateFs): st
 export function resolveWindowsGitBinary(
   env: WindowsGitEnv,
   fs: GitCandidateFs,
-  binaryRuns: (candidate: string) => boolean
+  binaryRuns: (candidate: string) => boolean,
+  pathCandidates: string[]
 ): string | null {
   return selectRunnableBinary({
-    candidates: windowsGitCandidates(env, fs),
+    candidates: [...windowsGitCandidates(env, fs), ...pathCandidates],
     fileExists: fs.existsSync,
     binaryRuns
   })
