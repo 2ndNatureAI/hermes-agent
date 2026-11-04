@@ -613,6 +613,10 @@ class WebhookAdapter(BasePlatformAdapter):
                 # run (minutes) — keep it off the gateway event loop.
                 with self._profile_scope(profile):
                     result = await asyncio.to_thread(execute_job_for_event, job_ref, event_context)
+                if result.get("error") == "Cron dispatch is paused":
+                    # The pause began after the edge accepted this delivery. Permit a later retry.
+                    self._seen_deliveries.pop(
+                        _WebhookDeliveryIdentity.from_parts(profile, route_name, delivery_id), None)
                 if not result.get("success"):
                     logger.warning("[webhook] cron-trigger job=%s route=%s did not complete cleanly: %s", job_ref,
                                    route_name, result.get("error"))
@@ -681,6 +685,11 @@ class WebhookAdapter(BasePlatformAdapter):
             lambda: self._admission_source(route_name, profile, delivery_id))
         if error_response is not None:
             return error_response
+        if route_config.get("cron_job"):
+            from agent.estop import check_paused
+
+            if check_paused("cron-webhook", logger):
+                return web.json_response({"status": "paused", "error": "Cron dispatch is paused"}, status=503)
         # Rate limiting (after auth)
         if not self._record_rate_limit_hit(route_name, time.time()):
             return _json_error("Rate limit exceeded", 429)

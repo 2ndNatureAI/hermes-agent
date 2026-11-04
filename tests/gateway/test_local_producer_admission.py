@@ -171,6 +171,37 @@ async def test_a_liveness_tick_is_admitted_into_the_session_that_started_the_pro
 
 
 @pytest.mark.asyncio
+async def test_queued_automation_waits_for_office_pause_to_lift(gateway):
+    from agent import estop
+    from gateway.session_contract import SessionRef
+
+    primary, sid = gateway.primary, gateway.launch.session_id
+    viewer = await gateway.watch(primary, sid)
+    gateway.gate = asyncio.Event()
+    submitted = await viewer.dispatch({'id': 'user-1', 'method': 'prompt.submit', 'params': {
+        'session_id': sid, 'input_id': 'user-before-pause', 'text': 'hello'}})
+    assert 'result' in submitted, submitted
+    await async_wait_until(lambda: len(gateway.turns) == 1, timeout=10, what='first user turn')
+    assert await gateway.drain(gateway.tick(primary, sid, 1)) == []
+    assert any(row['status'] == 'queued' and row['principal_id'].startswith('automation:')
+               for row in gateway.rows(primary, sid))
+
+    estop.office_engage(reason='review')
+    try:
+        gateway.gate.set()
+        await asyncio.wait_for(primary.sessions[sid].task, timeout=10)
+        rows = gateway.rows(primary, sid)
+        assert len(gateway.turns) == 1
+        assert any(row['status'] == 'queued' and row['principal_id'].startswith('automation:')
+                   for row in rows)
+    finally:
+        estop.office_disengage()
+    primary._schedule(SessionRef(primary.profile_id, sid))
+    await gateway.settled(primary, sid, 2)
+    assert len(gateway.turns) == 2
+
+
+@pytest.mark.asyncio
 async def test_waiting_ticks_fold_into_one_turn_and_none_outlives_its_process(gateway):
     primary, sid = gateway.primary, gateway.launch.session_id
     viewer = await gateway.watch(primary, sid)

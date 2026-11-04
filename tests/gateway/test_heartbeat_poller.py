@@ -159,6 +159,41 @@ async def test_emergency_stop_holds_due_tick_without_messaging_until_resume(poll
 
 
 @pytest.mark.asyncio
+async def test_office_pause_holds_authority_backed_heartbeat_admission(poller, tmp_path):
+    """The authority path must check the pause before its early return/admission."""
+    from agent import estop
+    from hermes_state import SessionDB
+
+    runner, adapter, watch, _key, clock = poller
+    db = SessionDB(tmp_path / "authority.db")
+    admitted = []
+
+    async def admit_automation(_adapter, _event, identity):
+        admitted.append(identity)
+
+    async def handler(_event):
+        pass
+
+    authority = SimpleNamespace(db=db, logical_owner=lambda sid: sid,
+                                admit_automation=admit_automation)
+    runner.session_authority = authority
+    adapter.set_message_handler(handler)
+    clock.now += 900
+    original = HeartbeatManager("heartbeat-session").state.to_json()
+    try:
+        estop.office_engage(reason="review")
+        await runner._heartbeat_poll_once(watch)
+        assert admitted == []
+        assert HeartbeatManager("heartbeat-session").state.to_json() == original
+        estop.office_disengage()
+        await runner._heartbeat_poll_once(watch)
+        assert len(admitted) == 1
+    finally:
+        estop.office_disengage()
+        db.close()
+
+
+@pytest.mark.asyncio
 async def test_emergency_stop_gate_drops_heartbeat_silently_but_tells_real_users(poller, monkeypatch):
     from agent import estop
 

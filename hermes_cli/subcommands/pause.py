@@ -25,7 +25,7 @@ def cmd_pause(args: argparse.Namespace) -> int:
         path = office_engage(reason=reason)
         print(f"⏸️  Office dispatch {'remains paused' if already else 'paused'}")
         print(f"    sentinel: {path}")
-        print("    Cron, Kanban, and automatic Office dispatch are held; new interactive turns remain available.")
+        print("    Cron, Kanban, and automatic Office dispatch are held; interactive admissions stay open.")
         return 0
     already = is_engaged()
     path = engage(reason=reason)

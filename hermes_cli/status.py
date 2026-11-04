@@ -99,7 +99,7 @@ def _estop_status_line():
     state = get_state()
     if state is None:
         if office_is_engaged():
-            return "⏸️  OFFICE DISPATCH PAUSED (`hermes resume --office-only` to lift; interactive turns available)"
+            return "⏸️  OFFICE DISPATCH PAUSED (`hermes resume --office-only` to lift; interactive admissions open)"
         return None
     reason = state.get("reason")
     office = "; Office dispatch pause also engaged" if office_is_engaged() else ""

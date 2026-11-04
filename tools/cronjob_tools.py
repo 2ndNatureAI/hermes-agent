@@ -435,6 +435,10 @@ def execute_job_for_event(
     Returns the ``_execute_job_now`` result shape:
     ``{"claimed": bool, "success": bool, "error": str|None}``.
     """
+    from agent.estop import check_paused
+
+    if check_paused("cron-webhook", logger):
+        return {"claimed": False, "success": False, "error": "Cron dispatch is paused"}
     try:
         job = resolve_job_ref(job_ref)
     except AmbiguousJobReference as e:

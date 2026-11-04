@@ -10,6 +10,22 @@ from tools.cronjob_tools import (
 )
 
 
+def test_event_cron_refuses_pause_before_resolving_job(tmp_path, monkeypatch):
+    from agent import estop
+    from tools import cronjob_tools
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(cronjob_tools, "resolve_job_ref",
+                        lambda _ref: pytest.fail("paused event must not resolve a job"))
+    estop.office_engage(reason="review")
+    try:
+        assert cronjob_tools.execute_job_for_event("any") == {
+            "claimed": False, "success": False, "error": "Cron dispatch is paused",
+        }
+    finally:
+        estop.office_disengage()
+
+
 # =========================================================================
 # Cron prompt scanning
 # =========================================================================

@@ -53,6 +53,54 @@ async def _drain_background_tasks(adapter: WebhookAdapter) -> None:
 
 class TestCronJobTrigger:
     @pytest.mark.asyncio
+    async def test_office_pause_refuses_webhook_cron_without_scheduling(self, tmp_path, monkeypatch):
+        from agent import estop
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        adapter = _make_adapter({"paused": {"secret": _INSECURE_NO_AUTH,
+                                             "cron_job": "review-sweeper", "prompt": "check"}})
+        fired = []
+        estop.office_engage(reason="review")
+        try:
+            def _execute(*args):
+                fired.append(args)
+                return {"claimed": True, "success": True, "error": None}
+
+            with patch("tools.cronjob_tools.execute_job_for_event", side_effect=_execute):
+                async with TestClient(TestServer(_create_app(adapter))) as cli:
+                    headers = {"X-GitHub-Delivery": "same-delivery"}
+                    resp = await cli.post("/webhooks/paused", json={"event": "check"}, headers=headers)
+                    assert resp.status == 503
+                    assert (await resp.json())["status"] == "paused"
+                    assert adapter._background_tasks == set()
+                    estop.office_disengage()
+                    retry = await cli.post("/webhooks/paused", json={"event": "check"}, headers=headers)
+                    assert retry.status == 202
+                    await _drain_background_tasks(adapter)
+            assert len(fired) == 1
+        finally:
+            estop.office_disengage()
+
+    @pytest.mark.asyncio
+    async def test_pause_race_releases_webhook_delivery_for_retry(self):
+        adapter = _make_adapter({"paused": {"secret": _INSECURE_NO_AUTH,
+                                             "cron_job": "review-sweeper", "prompt": "check"}})
+        outcomes = [
+            {"claimed": False, "success": False, "error": "Cron dispatch is paused"},
+            {"claimed": True, "success": True, "error": None},
+        ]
+        with patch("tools.cronjob_tools.execute_job_for_event", side_effect=lambda *_args: outcomes.pop(0)):
+            async with TestClient(TestServer(_create_app(adapter))) as cli:
+                headers = {"X-GitHub-Delivery": "race-delivery"}
+                first = await cli.post("/webhooks/paused", json={"event": "check"}, headers=headers)
+                assert first.status == 202
+                await _drain_background_tasks(adapter)
+                retry = await cli.post("/webhooks/paused", json={"event": "check"}, headers=headers)
+                assert retry.status == 202
+                await _drain_background_tasks(adapter)
+        assert outcomes == []
+
+    @pytest.mark.asyncio
     async def test_post_fires_job_with_event_context(self):
         routes = {
             "pr-feedback": {

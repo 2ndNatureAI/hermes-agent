@@ -184,6 +184,33 @@ def test_office_pause_is_fleet_scoped_and_does_not_remove_estop(tmp_path, monkey
     assert estop.office_is_engaged() is False
 
 
+def test_office_pause_preserves_existing_owner_and_reports_io_failure(hermes_home, monkeypatch):
+    path = estop.office_engage(reason="first owner")
+    original = path.read_bytes()
+    estop.office_engage(reason="second owner")
+    assert path.read_bytes() == original
+    estop.office_disengage()
+
+    class _DeniedPath:
+        parent = hermes_home
+
+        def stat(self):
+            raise PermissionError("denied")
+
+        def open(self, *_args, **_kwargs):
+            raise PermissionError("denied")
+
+        def unlink(self):
+            raise PermissionError("denied")
+
+    monkeypatch.setattr(estop, "office_sentinel_path", lambda: _DeniedPath())
+    assert estop.office_is_engaged() is True
+    with pytest.raises(PermissionError):
+        estop.office_engage()
+    with pytest.raises(PermissionError):
+        estop.office_disengage()
+
+
 # ── gateway turn-start integration ──────────────────────────────────────────
 
 
@@ -308,7 +335,7 @@ def test_status_distinguishes_office_pause_from_global_estop(hermes_home):
 
     estop.office_engage(reason="review")
     assert "OFFICE DISPATCH PAUSED" in _estop_status_line()
-    assert "interactive turns available" in _estop_status_line()
+    assert "interactive admissions open" in _estop_status_line()
     estop.engage()
     assert "Office dispatch pause also engaged" in _estop_status_line()
     estop.disengage()

@@ -44,21 +44,24 @@ def office_sentinel_path() -> Path:
 def office_is_engaged() -> bool:
     """A missing or unreadable Office sentinel must never permit automatic work."""
     try:
-        return office_sentinel_path().exists()
+        office_sentinel_path().stat()
+    except FileNotFoundError:
+        return False
     except OSError:
         return True
+    return True
 
 
 def office_engage(reason: Optional[str] = None) -> Path:
-    """Hold automatic Office work without blocking a new interactive Main turn."""
+    """Hold automatic Office work without overwriting an existing owner's pause."""
     path = office_sentinel_path()
     payload = {"engaged_at": datetime.now(UTC).isoformat(), "reason": reason or None}
+    path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    except OSError:
-        with suppress(OSError):
-            path.touch(exist_ok=True)
+        with path.open("x", encoding="utf-8") as file:
+            file.write(json.dumps(payload, indent=2) + "\n")
+    except FileExistsError:
+        pass
     return path
 
 
@@ -67,7 +70,7 @@ def office_disengage() -> bool:
     try:
         office_sentinel_path().unlink()
         return True
-    except OSError:
+    except FileNotFoundError:
         return False
 
 

@@ -10,6 +10,7 @@ import contextlib
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from functools import partial
+import logging
 import sqlite3
 from types import SimpleNamespace
 import uuid
@@ -1080,6 +1081,11 @@ class SessionAuthority:
             if any(row['status'] == 'unknown' for row in pending):
                 raise RuntimeStoreError('unknown_execution')
             first = next((row for row in pending if row['status'] == 'queued'), None)
+            if first is not None and first['principal_id'].startswith('automation:'):
+                from agent.estop import check_paused
+
+                if check_paused('automation', logging.getLogger(__name__)):
+                    raise RuntimeStoreError('office_paused')
             from gateway.config import Platform
             if live.source.platform == Platform.LOCAL:
                 # A reasoning command or a model pick made while the previous turn ran lands here, at the
