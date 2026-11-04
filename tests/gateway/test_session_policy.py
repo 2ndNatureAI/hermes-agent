@@ -5,6 +5,33 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 
+def test_explicit_empty_toolsets_exclude_default_mcp_and_plugin_tools(tmp_path):
+    from gateway.session_policy import build_policy
+    from hermes_cli.tools_config import enabled_mcp_server_names
+    from model_tools import get_tool_definitions
+
+    config = {
+        'platform_toolsets': {'cli': ['terminal']},
+        'mcp_servers': {'fixture-server': {'command': 'unused'}},
+    }
+    assert 'fixture-server' in enabled_mcp_server_names(config)
+
+    policy = build_policy(
+        {'source': 'cli', 'cwd': str(tmp_path), 'model': 'fixture', 'toolsets': []},
+        config,
+    )
+    assert policy.toolsets == ()
+    assert policy.current_toolsets(policy.config()) == ()
+    assert get_tool_definitions(enabled_toolsets=list(policy.toolsets), quiet_mode=True) == []
+
+    selected = build_policy(
+        {'source': 'cli', 'cwd': str(tmp_path), 'model': 'fixture', 'toolsets': ['terminal', 'no_mcp']},
+        config,
+    )
+    assert 'terminal' in selected.toolsets
+    assert 'fixture-server' not in selected.toolsets
+
+
 def test_policy_selects_surface_and_isolates_cwd(tmp_path):
     from gateway.session_policy import build_policy, policy_scope
     from agent.runtime_cwd import resolve_agent_cwd
