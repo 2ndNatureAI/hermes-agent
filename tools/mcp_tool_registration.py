@@ -521,9 +521,11 @@ def _same_server_route(server: Any, config: dict, *, cross_profile: bool = False
         return False
     if not cross_profile:
         return True
-    owner_idle = getattr(server, "_idle_timeout_seconds", _get_lifecycle_seconds(server._config, "idle_timeout_seconds"))
-    if owner_idle != _get_lifecycle_seconds(config, "idle_timeout_seconds"):
-        return False
+    if "url" not in server._config:
+        owner_idle = getattr(server, "_idle_timeout_seconds",
+                             _get_lifecycle_seconds(server._config, "idle_timeout_seconds"))
+        if owner_idle != _get_lifecycle_seconds(config, "idle_timeout_seconds"):
+            return False
     # Identities match, so both sides carry the same normalised auth type.
     recorded = getattr(server, "_resolved_identity", None)
     return (_auth_type(config) != "oauth" and recorded is not None
@@ -612,6 +614,11 @@ def _register_connected_into_current_scope(servers: dict) -> int:
         key, server = shared[0]
         # Visibility for this profile: the owner keeps teardown, this scope sees the connection.
         with _core._lock:
+            if (_core._servers.get(key) is not server or getattr(server, "session", None) is None
+                    or _server_key(name, scope, current=False) in _core._servers
+                    or not _same_server_route(server, config, cross_profile=True,
+                                              resolved_identity=resolved_ids.get(name))):
+                continue
             _core._server_tool_scopes.setdefault(key, set()).add(scope)
         _record_scope_trust(name, config, scope)
         if registry.get_tool_names_for_toolset(f"mcp-{name}"):

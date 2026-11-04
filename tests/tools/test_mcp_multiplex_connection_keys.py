@@ -399,6 +399,42 @@ def test_launch_profile_pruning_a_server_keeps_served_profiles_same_named_connec
     assert core._orphaned_adopters == {"c": {"x"}}
 
 
+def test_adoption_rechecks_live_idle_limit_after_selection(two_profiles, monkeypatch):
+    """The owner can change its idle policy between selection and the adopter's attach lock."""
+    import tools.mcp_tool as core
+    from tools import mcp_tool_registration as registration
+
+    owner_scope = two_profiles("a")
+    config = {"command": "uvx", "args": ["mcp-server-fetch"]}
+    server = SimpleNamespace(name="x", session=object(), _config=config,
+                             _idle_timeout_seconds=None, _resolved_identity="same",
+                             _tools=[], tool_timeout=30, initialize_result=None,
+                             _registered_tool_names=[], _sampling=None)
+    key = (owner_scope, "x")
+    core._servers[key] = server
+    core._server_scope_keys[key] = owner_scope
+    core._server_tool_scopes[key] = {owner_scope}
+    adopter_scope = two_profiles("b")
+    monkeypatch.setattr(registration, "_adopter_identity_digest", lambda name, cfg: "same")
+    compare = registration._same_server_route
+    calls = []
+
+    def owner_changes_after_selection(candidate, cfg, **kwargs):
+        match = compare(candidate, cfg, **kwargs)
+        calls.append(match)
+        if len(calls) == 1:
+            server._idle_timeout_seconds = 900
+        return match
+
+    monkeypatch.setattr(registration, "_same_server_route", owner_changes_after_selection)
+    registration.register_connected_into_current_scope({"x": dict(config)})
+    assert calls == [True, False]
+    assert adopter_scope not in core._server_tool_scopes[key]
+
+    registration.register_connected_into_current_scope({"x": {**config, "idle_timeout_seconds": 900}})
+    assert adopter_scope in core._server_tool_scopes[key]
+
+
 def test_adopter_scope_setup_failure_leaks_no_override_and_continues(two_profiles, monkeypatch):
     """A corrupt/removed adopter home raising inside ``build_profile_secret_scope`` must
     not leak that adopter's HERMES_HOME override into the caller's context, and the
