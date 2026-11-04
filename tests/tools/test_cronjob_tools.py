@@ -62,6 +62,26 @@ def test_event_claim_precedes_execution_without_running_job(tmp_path, monkeypatc
     assert calls == [("resolve", "job-name"), ("claim", "job-id")]
 
 
+def test_event_claim_rechecks_pause_after_job_resolution(tmp_path, monkeypatch):
+    from agent import estop
+    from tools import cronjob_tools
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    def resolve(_ref):
+        estop.office_engage(reason="during resolution")
+        return {"id": "job-id"}
+
+    monkeypatch.setattr(cronjob_tools, "resolve_job_ref", resolve)
+    monkeypatch.setattr(cronjob_tools, "_claim_for_manual_run",
+                        lambda *_args: pytest.fail("claim crossed a pause raised during resolution"))
+    try:
+        job, error = cronjob_tools.claim_job_for_event("job-name")
+        assert job is None and error["error"] == "Cron dispatch is paused"
+    finally:
+        estop.office_disengage()
+
+
 def test_manual_cron_run_refuses_pause_before_handoff_or_background(tmp_path, monkeypatch):
     from agent import estop
     from tools import cronjob_tools

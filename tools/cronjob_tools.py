@@ -432,6 +432,9 @@ def claim_job_for_event(job_ref: str) -> tuple[Optional[dict[str, Any]], Optiona
         return None, {"claimed": False, "success": False, "error": str(e)}
     if job is None:
         return None, {"claimed": False, "success": False, "error": f"Cron job '{job_ref}' not found."}
+    # Resolution can touch disk; re-read the pause immediately before the claim.
+    if check_paused("cron-webhook", logger):
+        return None, {"claimed": False, "success": False, "error": "Cron dispatch is paused"}
     return _claim_for_manual_run(job["id"], "webhook event")
 
 
