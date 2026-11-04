@@ -30,8 +30,10 @@ def _expose_working_git(root: Path) -> None:
     from hermes_cli._subprocess_compat import expose_pm_git
     from hermes_cli.update_cmd_git import _ensure_non_trampoline_git, _prefer_git_on_path
 
-    expose_pm_git(root)
-    _prefer_git_on_path(_ensure_non_trampoline_git(["git"]))
+    try:
+        expose_pm_git(root)
+    finally:
+        _prefer_git_on_path(_ensure_non_trampoline_git(["git"]))
 
 
 def complete_source_checkout(

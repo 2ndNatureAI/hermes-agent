@@ -156,6 +156,22 @@ class TestGitTrampolineSelfHeal:
         assert probe.returncode == 0, probe.stderr
 
     @pytest.mark.platforms("windows")
+    def test_source_completion_fallback_survives_pm_exposure_error(self, monkeypatch, tmp_path):
+        from hermes_cli import source_completion, update_cmd_git
+
+        real = update_cmd._locate_real_git()
+        assert real is not None
+        monkeypatch.setenv("PATH", "broken-managed-git-dir")
+        def fail_exposure(root):
+            raise OSError("PM exposure failed")
+        monkeypatch.setattr("hermes_cli._subprocess_compat.expose_pm_git", fail_exposure)
+        monkeypatch.setattr(update_cmd_git, "_ensure_non_trampoline_git", lambda cmd: [str(real)])
+
+        with pytest.raises(OSError, match="PM exposure failed"):
+            source_completion._expose_working_git(tmp_path)
+        assert os.environ["PATH"].split(os.pathsep)[0] == str(real.parent)
+
+    @pytest.mark.platforms("windows")
     def test_trampoline_no_real_git_keeps_command(self, capsys):
         from hermes_cli import update_cmd
 
