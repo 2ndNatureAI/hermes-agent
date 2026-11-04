@@ -661,6 +661,7 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False, ch
         sys.exit(1)
 
     git_cmd = _base_git_cmd()
+    git_cmd = _ensure_non_trampoline_git(git_cmd)
     # The check fetches over HTTPS too; give git the same CA bundle Python
     # uses, or --check fails where the apply path succeeds (see
     # _map_ssl_cert_file_for_git).
@@ -1614,17 +1615,17 @@ def _prepare_git_command(*, checkout_move=None) -> tuple[bool, list, bool]:
 
     expose_pm_git(_m().PROJECT_ROOT)
     git_cmd = _base_git_cmd()
+    # Select a working binary before config/CA probes, and let later build
+    # children that invoke bare git find that same binary in this updater process.
+    git_cmd = _ensure_non_trampoline_git(git_cmd)
+    if git_cmd[0] != "git":
+        os.environ["PATH"] = str(Path(git_cmd[0]).parent) + os.pathsep + os.environ.get("PATH", "")
     if sys.platform == "win32" and git_dir.exists():
         _git_run(git_cmd, ["config", "windows.appendAtomically", "false"])
     # One CA story for the whole update: git's libcurl must trust what the
     # channel read already trusts, or the fetch dies mid-update behind a
     # TLS-inspecting proxy (see _map_ssl_cert_file_for_git).
     _map_ssl_cert_file_for_git(git_cmd)
-    # A broken Git-for-Windows trampoline refuses every call with a "BUG (fork bomb)" guard;
-    # swap in a real binary up front so git survives instead of degrading to ZIP.
-    # See #87876.
-    git_cmd = _ensure_non_trampoline_git(git_cmd)
-
     # Before stash/branch logic: npm rewrites package-lock.json non-deterministically and
     # line-ending churn is machine-made dirt; both would otherwise force an autostash every update.
     _discard_lockfile_churn(git_cmd, _m().PROJECT_ROOT, checkout_move=checkout_move)

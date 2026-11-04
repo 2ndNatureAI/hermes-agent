@@ -1,6 +1,9 @@
 """Git trampoline recovery; branch updates use the real target-identity suite."""
 
+import os
 import subprocess
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -78,6 +81,64 @@ class TestGitTrampolineSelfHeal:
         assert result == [str(real), "-c", "windows.appendAtomically=false"]
         out = capsys.readouterr().out
         assert "switching to real git" in out
+
+    @pytest.mark.platforms("windows")
+    def test_access_denied_git_is_not_accepted_as_healthy(self):
+        git_cmd = ["git", "-c", "windows.appendAtomically=false"]
+        denied = subprocess.CompletedProcess(
+            git_cmd, 1, stdout="", stderr="error launching git: Access is denied.\n"
+        )
+        real = Path(r"C:\Program Files\Git\ucrt64\libexec\git-core\git.exe")
+        with (
+            patch("hermes_cli.update_cmd.subprocess.run", return_value=denied),
+            patch("hermes_cli.update_cmd._locate_real_git", return_value=real),
+        ):
+            assert update_cmd._ensure_non_trampoline_git(git_cmd)[0] == str(real)
+
+    def test_check_uses_healed_git_for_fetch(self, monkeypatch, tmp_path):
+        (tmp_path / ".git").mkdir()
+        broken = ["git", "-c", "windows.appendAtomically=false"]
+        healed = ["working-git", *broken[1:]]
+        observed = []
+        monkeypatch.setattr(update_cmd, "_m", lambda: SimpleNamespace(PROJECT_ROOT=tmp_path))
+        monkeypatch.setattr(update_cmd, "_base_git_cmd", lambda: broken)
+        monkeypatch.setattr(update_cmd, "_ensure_non_trampoline_git", lambda cmd: healed)
+        monkeypatch.setattr(update_cmd, "_map_ssl_cert_file_for_git", lambda cmd: None)
+        monkeypatch.setattr(update_cmd, "_source_update_channel", lambda **kwargs: "main")
+        monkeypatch.setattr(update_cmd._check, "clear_git_debris", lambda root: None)
+        monkeypatch.setattr(update_cmd._check, "channel_compare_branch", lambda *args: "main")
+        monkeypatch.setattr(update_cmd._check, "is_shallow_repository", lambda *args: False)
+        monkeypatch.setattr(update_cmd._check, "fetch_compare_branch",
+                            lambda cmd, *args: (observed.append(cmd) or subprocess.CompletedProcess(cmd, 0), "origin/main"))
+        monkeypatch.setattr(update_cmd._check, "compare_ref_exists", lambda *args: True)
+        monkeypatch.setattr(update_cmd._check, "report_rev_list_verdict", lambda *args: None)
+        with patch("hermes_cli.update_contract.evaluate_update_admission", return_value=None):
+            update_cmd._cmd_update_check()
+        assert observed == [healed]
+
+    @pytest.mark.platforms("windows")
+    def test_apply_selects_git_before_ca_probe_and_children(self, monkeypatch, tmp_path):
+        (tmp_path / ".git").mkdir()
+        broken = ["git", "-c", "windows.appendAtomically=false"]
+        real = Path(r"C:\Program Files\Git\ucrt64\libexec\git-core\git.exe")
+        healed = [str(real), *broken[1:]]
+        events = []
+        monkeypatch.setenv("PATH", "broken-git-dir")
+        monkeypatch.setattr(update_cmd, "_m", lambda: SimpleNamespace(
+            PROJECT_ROOT=tmp_path, _get_origin_url=lambda *args: "https://github.com/NousResearch/hermes-agent.git"))
+        monkeypatch.setattr("hermes_cli._subprocess_compat.expose_pm_git", lambda root: None)
+        monkeypatch.setattr(update_cmd, "_base_git_cmd", lambda: broken)
+        monkeypatch.setattr(update_cmd, "_git_run", lambda cmd, args: events.append(("config", cmd)))
+        monkeypatch.setattr(update_cmd, "_map_ssl_cert_file_for_git", lambda cmd: events.append(("ca", cmd)))
+        monkeypatch.setattr(update_cmd, "_ensure_non_trampoline_git",
+                            lambda cmd: events.append(("select", cmd)) or healed)
+        monkeypatch.setattr(update_cmd, "_discard_lockfile_churn", lambda *args, **kwargs: None)
+        monkeypatch.setattr(update_cmd, "_normalize_managed_eol", lambda *args, **kwargs: None)
+        monkeypatch.setattr(update_cmd, "_is_fork", lambda url: False)
+
+        assert update_cmd._prepare_git_command()[:2] == (False, healed)
+        assert events == [("select", broken), ("config", healed), ("ca", healed)]
+        assert os.environ["PATH"].split(os.pathsep)[0] == str(real.parent)
 
     @pytest.mark.platforms("windows")
     def test_trampoline_no_real_git_keeps_command(self, capsys):

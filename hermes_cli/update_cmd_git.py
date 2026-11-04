@@ -575,14 +575,17 @@ def _print_fetch_failure(stderr: str, *, git_cmd=None, root: Optional[Path] = No
 
 
 def _probe_fork_bomb(argv: list) -> Optional[bool]:
-    """Run ``<argv> --version``; True/False = guard message seen/absent, None = probe itself failed."""
+    """Run ``<argv> --version``; reject broken launchers and failed real binaries."""
     try:
         from hermes_cli.update_custody import run_git
 
         result = run_git(argv, ["--version"], timeout=15, **_GIT_TEXT_KW)
     except Exception:
         return None
-    return "fork bomb" in ((result.stdout or "") + (result.stderr or "")).lower()
+    output = ((result.stdout or "") + (result.stderr or "")).lower()
+    if result.returncode != 0:
+        return True if "fork bomb" in output or "error launching git" in output else None
+    return False
 
 
 def _git_is_trampoline(git_cmd: list) -> bool:
@@ -625,7 +628,7 @@ def _locate_real_git() -> Optional[Path]:
     candidates = [
         Path(base) / "Git" / arch / "libexec" / "git-core" / "git.exe"
         for base in (r"C:\Program Files", r"C:\Program Files (x86)")
-        for arch in ("clangarm64", "mingw64", "mingw32")
+        for arch in ("clangarm64", "ucrt64", "mingw64", "mingw32")
     ] + _portable_git_candidates()
     return next((c for c in candidates if c.exists() and _probe_fork_bomb([str(c)]) is False), None)
 
