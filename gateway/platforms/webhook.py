@@ -573,6 +573,11 @@ class WebhookAdapter(BasePlatformAdapter):
                                    event_type: str, delivery_id: str, profile: Optional[str] = None) -> web.Response:
         """deliver_only: the rendered prompt IS the message — skip the agent, reuse the same
         auth/rate-limit/idempotency/template pipeline."""
+        from agent.estop import check_paused
+
+        if check_paused("webhook", logger):
+            self._seen_deliveries.pop(_WebhookDeliveryIdentity.from_parts(profile, route_name, delivery_id), None)
+            return web.json_response({"status": "paused", "error": "Webhook dispatch is paused"}, status=503)
         delivery = {"deliver": route_config.get("deliver", "log"), "payload": payload, "profile": profile,
                     "deliver_extra": self._render_delivery_extra(route_config.get("deliver_extra", {}), payload),
                     "route": route_name,
@@ -694,11 +699,10 @@ class WebhookAdapter(BasePlatformAdapter):
             lambda: self._admission_source(route_name, profile, delivery_id))
         if error_response is not None:
             return error_response
-        if route_config.get("cron_job"):
-            from agent.estop import check_paused
+        from agent.estop import check_paused
 
-            if check_paused("cron-webhook", logger):
-                return web.json_response({"status": "paused", "error": "Cron dispatch is paused"}, status=503)
+        if check_paused("webhook", logger):
+            return web.json_response({"status": "paused", "error": "Webhook dispatch is paused"}, status=503)
         # Rate limiting (after auth)
         if not self._record_rate_limit_hit(route_name, time.time()):
             return _json_error("Rate limit exceeded", 429)
@@ -813,6 +817,10 @@ class WebhookAdapter(BasePlatformAdapter):
                                route_name: str, profile, event_type: str) -> Optional[str]:
         """Record delivery info and admit the run through the durable producer (shared by the immediate
         and coalesced paths). ``"accepted"`` / ``"duplicate"``, or None when admission failed."""
+        from agent.estop import check_paused
+
+        if check_paused("webhook", logger):
+            return None
         # (profile, route, delivery_id) in the session key → concurrent webhooks get independent runs.
         identity = _WebhookDeliveryIdentity.from_parts(profile, route_name, delivery_id)
         session_chat_id = identity.session_chat_id
