@@ -6,8 +6,9 @@ turns skip work; in-flight work is never killed. The check is one or two uncache
 ``os.stat`` calls (process home + fleet root when they differ). The body is optional
 JSON ``{"reason", "engaged_at"}``; a corrupt/empty file still counts as engaged
 (fail safe, e.g. ``touch ~/.hermes/ESTOP``). Ported from gastownhall/gastown estop.go (MIT).
-``OFFICE_PAUSE`` holds automatic dispatch through ``check_paused`` while leaving
-new interactive turns available. It never replaces the global ESTOP sentinel.
+``OFFICE_PAUSE`` holds automatic dispatch through ``check_paused`` and new turns
+for named Office profiles while leaving default Main interactive turns available.
+It never replaces the global ESTOP sentinel.
 """
 
 from __future__ import annotations
