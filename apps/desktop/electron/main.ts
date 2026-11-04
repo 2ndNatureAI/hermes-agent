@@ -286,7 +286,7 @@ import { downloadViaOauthSessionToFile, downloadViaTokenToFile } from './gateway
 import { stopGatewayBeforeUpdate } from './gateway-stop-before-update'
 import { resolveGatewayVersion } from './gateway-version'
 import { probeGatewayWebSocket } from './gateway-ws-probe'
-import { windowsGitCandidates } from './git-binary-candidates'
+import { resolveWindowsGitBinary } from './git-binary-candidates'
 import { registerGitIpc } from './git-ipc'
 import {
   assertExistingPathForOpen,
@@ -3234,16 +3234,15 @@ function resolveGitBinary() {
   // app-* version, so it can only be found by enumerating the dir). UGit's
   // git.exe is usually on PATH, but an Explorer-launched Electron inherits the
   // login-time environment block and can miss it (#61494).
-  const candidates = windowsGitCandidates(
+  _gitBinaryCache = resolveWindowsGitBinary(
     {
       localAppData,
       programFiles: process.env['ProgramFiles'] || 'C:\\Program Files',
       programFilesX86: process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)'
     },
-    { existsSync: fileExists, readdirSync: dir => fs.readdirSync(dir) }
-  )
-
-  _gitBinaryCache = candidates.find(fileExists) || findOnPath('git') || 'git'
+    { existsSync: fileExists, readdirSync: dir => fs.readdirSync(dir) },
+    binaryRuns
+  ) || findOnPath('git') || 'git'
 
   return _gitBinaryCache
 }

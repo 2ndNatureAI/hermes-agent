@@ -1,5 +1,7 @@
 import path from 'node:path'
 
+import { selectRunnableBinary } from './select-runnable-binary'
+
 /** The filesystem surface the candidate builders need — injectable for tests. */
 export interface GitCandidateFs {
   existsSync: (candidate: string) => boolean
@@ -55,7 +57,6 @@ export function ugitGitBinaries(localAppData: string, fs: GitCandidateFs): strin
     .filter(fs.existsSync)
 }
 
-
 /**
  * Find Git installed by Hermes PM under `%LOCALAPPDATA%\hermes\tools`.
  * PM versions the tool directory, so resolve the newest available executable
@@ -102,4 +103,17 @@ export function windowsGitCandidates(env: WindowsGitEnv, fs: GitCandidateFs): st
   }
 
   return candidates
+}
+
+/** Choose the first executable Windows Git; a present PM copy can be denied by the OS. */
+export function resolveWindowsGitBinary(
+  env: WindowsGitEnv,
+  fs: GitCandidateFs,
+  binaryRuns: (candidate: string) => boolean
+): string | null {
+  return selectRunnableBinary({
+    candidates: windowsGitCandidates(env, fs),
+    fileExists: fs.existsSync,
+    binaryRuns
+  })
 }

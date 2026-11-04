@@ -3,7 +3,13 @@ import path from 'node:path'
 
 import { describe, test } from 'vitest'
 
-import { type GitCandidateFs, managedGitBinaries, ugitGitBinaries, windowsGitCandidates } from './git-binary-candidates'
+import {
+  type GitCandidateFs,
+  managedGitBinaries,
+  resolveWindowsGitBinary,
+  ugitGitBinaries,
+  windowsGitCandidates
+} from './git-binary-candidates'
 
 const LAD = path.join('C:', 'Users', 'suceru', 'AppData', 'Local')
 
@@ -108,6 +114,17 @@ describe('windowsGitCandidates (#61494)', () => {
     const candidates = windowsGitCandidates(env, fs)
 
     assert.equal(candidates.find(fs.existsSync), managed)
+    assert.equal(resolveWindowsGitBinary(env, fs, () => true), managed)
+  })
+
+  test('skips a present managed Git that cannot launch and uses the working system Git', () => {
+    const managed = path.join(LAD, 'hermes', 'tools', 'git-2.53.0+3-win32-x64', 'cmd', 'git.exe')
+    const system = path.join(env.programFiles, 'Git', 'cmd', 'git.exe')
+    const fs = fakeFs({ [path.join(LAD, 'hermes', 'tools')]: ['git-2.53.0+3-win32-x64'] }, [managed, system])
+
+    const selected = resolveWindowsGitBinary(env, fs, candidate => candidate === system)
+
+    assert.equal(selected, system)
   })
 
   test('still prefers the hermes-bundled portable git over UGit', () => {
