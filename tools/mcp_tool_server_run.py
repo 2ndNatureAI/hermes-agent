@@ -78,8 +78,9 @@ class MCPServerRunMixin:
         if keepalive_interval is None and not self._session_proven:
             proof_at = time.monotonic() + _core._DEFAULT_KEEPALIVE_INTERVAL
         shutdown_task, reconnect_task = self._event_waiters()
+        config_task = asyncio.ensure_future(self._lifecycle_config_event.wait())
         rpc_idle_task = None
-        waiters = [shutdown_task, reconnect_task]
+        waiters = [shutdown_task, reconnect_task, config_task]
         try:
             while True:
                 if self._recycle_if_due():
@@ -97,11 +98,16 @@ class MCPServerRunMixin:
                     # now-visible deadline is evaluated instead of waiting forever. (For a stdio
                     # server with no limits the wake is a harmless extra iteration.)
                     rpc_idle_task = rpc_idle_task or asyncio.ensure_future(self._wait_for_rpc_idle())
-                waiters = [t for t in (shutdown_task, reconnect_task, rpc_idle_task) if t is not None]
+                waiters = [t for t in (shutdown_task, reconnect_task, config_task, rpc_idle_task)
+                           if t is not None]
                 done, _pending = await asyncio.wait(
                     waiters, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
                 if shutdown_task in done or reconnect_task in done:
                     break
+                if config_task in done:
+                    self._lifecycle_config_event.clear()
+                    config_task = asyncio.ensure_future(self._lifecycle_config_event.wait())
+                    continue
                 if rpc_idle_task in done:
                     rpc_idle_task = None
                     continue
@@ -146,6 +152,8 @@ class MCPServerRunMixin:
                     self._mark_session_proven()
         finally:
             await self._cancel_waiters(*waiters)
+            if config_task not in waiters:
+                await self._cancel_waiters(config_task)
         if self._shutdown_event.is_set():
             self._fail_inflight_calls("shutdown")
             return "shutdown"
@@ -154,6 +162,14 @@ class MCPServerRunMixin:
         self._fail_inflight_calls("reconnect")
         self._reconnect_event.clear()
         return "reconnect"
+
+    def update_idle_timeout(self, seconds: Optional[float]) -> bool:
+        """Apply only the stdio idle limit on the MCP loop, without replacing an active session."""
+        if self._is_http() or self._idle_timeout_seconds == seconds:
+            return False
+        self._idle_timeout_seconds = seconds
+        self._lifecycle_config_event.set()
+        return True
 
     async def _wait_for_reconnect_or_shutdown(self, timeout: Optional[float] = None) -> str:
         """Parked wait: ``"shutdown"``, ``"reconnect"`` (explicit request; event cleared first) or

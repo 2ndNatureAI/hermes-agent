@@ -12,7 +12,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
-from tools.mcp_tool_common import _core, _parse_boolish, mcp_server_enabled
+from tools.mcp_tool_common import _core, _get_lifecycle_seconds, _parse_boolish, mcp_server_enabled
 from tools import mcp_tool_config as _config
 from tools import mcp_tool_errors as _errors
 from tools import mcp_tool_lifecycle as _lifecycle
@@ -671,6 +671,8 @@ def reconcile_mcp_servers_with_config() -> dict[str, list[str]]:
     with _owner_secret_scope():
         servers = _config._load_mcp_config()
     wanted = {name for name, cfg in servers.items() if mcp_server_enabled(cfg)}
+    idle_limits = {name: _get_lifecycle_seconds(cfg, "idle_timeout_seconds")
+                   for name, cfg in servers.items() if name in wanted and "url" not in cfg}
     scope = _core._mcp_registry_scope()
     with _core._lock:
         owned = [key for key, owner in _core._server_scope_keys.items() if owner == scope]
@@ -678,6 +680,28 @@ def reconcile_mcp_servers_with_config() -> dict[str, list[str]]:
         connecting = {_key_name(key) for key in owned if key in _core._server_connecting}
         lazy = {key for key in _core._lazy_server_configs
                 if _key_scope(key) == scope and _key_name(key) not in wanted}
+        idle_updates = [
+            (key, _core._servers[key], idle_limits[_key_name(key)])
+            for key in owned if key in _core._servers and _key_name(key) in wanted
+            and _key_name(key) in idle_limits
+            and not (_core._server_tool_scopes.get(key, set()) - {scope})
+            and callable(getattr(_core._servers[key], "update_idle_timeout", None))
+            and getattr(_core._servers[key], "_idle_timeout_seconds", None) != idle_limits[_key_name(key)]
+        ]
+    if idle_updates:
+        async def _apply_idle_updates():
+            updated = []
+            for key, server, seconds in idle_updates:
+                with _core._lock:
+                    still_owned = (_core._servers.get(key) is server
+                                   and _core._server_scope_keys.get(key) == scope
+                                   and not (_core._server_tool_scopes.get(key, set()) - {scope}))
+                if still_owned and server.update_idle_timeout(seconds):
+                    updated.append(_key_name(key))
+            return updated
+
+        for name in _loop._run_on_mcp_loop(_apply_idle_updates, timeout=5):
+            logger.info("MCP server '%s': stdio idle limit reconciled with config", name)
     stale = sorted(live - wanted)
     if stale:
         logger.info("MCP server(s) %s no longer in config (or disabled); disconnecting", ", ".join(stale))

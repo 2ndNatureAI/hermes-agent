@@ -324,6 +324,7 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
         "_inflight_tasks",
         "_last_park_line",
         "_last_tool_call_at",
+        "_lifecycle_config_event",
         "_lifecycle_started_at",
         "_list_cache_meta",
         "_max_lifetime_seconds",
@@ -366,6 +367,7 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
         self._shutdown_event = asyncio.Event()
         # Set -> _run_http/_run_stdio exit cleanly and run() re-enters the transport.
         self._reconnect_event = asyncio.Event()
+        self._lifecycle_config_event = asyncio.Event()
         self._tools: list = []
         self._registered_tool_names: list[str] = []
         self._config: dict = {}
