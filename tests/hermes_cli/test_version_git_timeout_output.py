@@ -7,10 +7,23 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from hermes_cli.version_info import _run_git
+from hermes_cli.version_info import _git_version_info, _run_git
 
 
 class VersionGitOutputTest(unittest.TestCase):
+    def test_status_uses_bounded_helper_and_preserves_scan_options(self):
+        for include_untracked in (False, True):
+            with self.subTest(include_untracked=include_untracked):
+                def result(_repo, *args):
+                    if args[:3] == ('--no-optional-locks', 'status', '--porcelain'):
+                        self.assertEqual('-uno' in args, not include_untracked)
+                        return ' M sample.py'
+                    return None
+                with patch('hermes_cli.version_info._run_git', side_effect=result) as probe:
+                    self.assertTrue(_git_version_info(Path('.'), include_untracked=include_untracked).dirty)
+                    self.assertTrue(any(call.args[1:4] == ('--no-optional-locks', 'status', '--porcelain')
+                                        for call in probe.call_args_list))
+
     def test_output_uses_file_and_timeout_returns_none(self):
         def successful(*args, **kwargs):
             self.assertNotEqual(kwargs['stdout'], subprocess.PIPE)
