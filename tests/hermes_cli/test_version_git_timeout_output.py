@@ -23,6 +23,10 @@ class VersionGitOutputTest(unittest.TestCase):
                     self.assertTrue(_git_version_info(Path('.'), include_untracked=include_untracked).dirty)
                     self.assertTrue(any(call.args[1:4] == ('--no-optional-locks', 'status', '--porcelain')
                                         for call in probe.call_args_list))
+        # The helper returns None for either a clean empty status or a failed probe;
+        # both must retain the previous non-dirty fallback.
+        with patch('hermes_cli.version_info._run_git', return_value=None):
+            self.assertFalse(_git_version_info(Path('.')).dirty)
 
     def test_output_uses_file_and_timeout_returns_none(self):
         def successful(*args, **kwargs):
@@ -33,6 +37,8 @@ class VersionGitOutputTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with patch('hermes_cli.version_info.subprocess.run', side_effect=successful):
                 self.assertEqual(_run_git(Path(tmp), 'rev-parse', 'HEAD'), 'abc123')
+            with patch('hermes_cli.version_info.subprocess.run', return_value=SimpleNamespace(returncode=0)):
+                self.assertIsNone(_run_git(Path(tmp), 'status', '--porcelain'))
             with patch('hermes_cli.version_info.subprocess.run', side_effect=subprocess.TimeoutExpired('git', 3)):
                 self.assertIsNone(_run_git(Path(tmp), 'rev-parse', 'HEAD'))
 
