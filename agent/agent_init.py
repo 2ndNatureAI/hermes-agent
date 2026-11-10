@@ -2217,13 +2217,16 @@ def init_agent(
     _init_prompt_cache_config(agent)
     _init_turn_state(agent, run_budget_seconds)
     _set_defaults(agent, _STREAM_STATE)
-    _build_client(agent, api_key, base_url, fallback_model)
+    from agent.startup_timing import stage
+    with stage('client_init'):
+        _build_client(agent, api_key, base_url, fallback_model)
     _init_fallback_chain(agent, fallback_model)
     _load_tools(agent, enabled_toolsets, disabled_toolsets)
-    _init_session_state(
-        agent, session_id, session_db, parent_session_id, reasoning_config, max_tokens,
-        checkpoints_enabled, checkpoint_max_snapshots, checkpoint_max_total_size_mb, checkpoint_max_file_size_mb,
-    )
+    with stage('session_state_init'):
+        _init_session_state(
+            agent, session_id, session_db, parent_session_id, reasoning_config, max_tokens,
+            checkpoints_enabled, checkpoint_max_snapshots, checkpoint_max_total_size_mb, checkpoint_max_file_size_mb,
+        )
 
     # Load config once for memory, skills, and compression sections
     try:
@@ -2242,7 +2245,8 @@ def init_agent(
         _agent_cfg = {}
 
     _apply_display_config(agent, _agent_cfg, platform)
-    _init_memory(agent, _agent_cfg, skip_memory, platform, memory_manager=memory_manager)
+    with stage('memory_init'):
+        _init_memory(agent, _agent_cfg, skip_memory, platform, memory_manager=memory_manager)
     _apply_agent_section(agent, _agent_cfg)
     cs = _parse_compression_config(agent, _agent_cfg)
     _config_context_length, _custom_providers, _effective_context_length, _model_cfg = _resolve_context_length(

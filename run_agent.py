@@ -285,7 +285,9 @@ class AIAgent(
             warnings.warn("tool_delay is deprecated and ignored; sequential tool calls "
                           "no longer sleep between executions.", DeprecationWarning, stacklevel=2)
         from agent.agent_init import init_agent
-        init_agent(self, **init_kwargs)
+        from agent.startup_timing import stage
+        with stage('agent_init'):
+            init_agent(self, **init_kwargs)
 
     def _get_session_db_for_recall(self):
         """SessionDB for recall, opening the default state DB when no ``session_db`` was passed so the

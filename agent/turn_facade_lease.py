@@ -344,11 +344,14 @@ def admit_durable_turn_lease(
         )
 
     authority_floor = time.time()  # every acquisition attempt stamps its expiry after this instant
-    if not db.acquire_session_turn_lease(
-        session_id, holder, ttl_seconds=LEASE_TTL_SECONDS, wait_seconds=LEASE_WAIT_SECONDS,
-        on_wait=_on_wait, on_contended=_on_contended,
-        should_abort=lambda: getattr(agent, "_interrupt_requested", False),
-    ):
+    from agent.startup_timing import stage
+    with stage('turn_lease'):
+        acquired = db.acquire_session_turn_lease(
+            session_id, holder, ttl_seconds=LEASE_TTL_SECONDS, wait_seconds=LEASE_WAIT_SECONDS,
+            on_wait=_on_wait, on_contended=_on_contended,
+            should_abort=lambda: getattr(agent, "_interrupt_requested", False),
+        )
+    if not acquired:
         admission.early_result = _lease_not_acquired_result(agent, session_id, conversation_history,
                                                             waited=announced)
         return admission
