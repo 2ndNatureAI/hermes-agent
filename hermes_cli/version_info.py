@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,13 +61,18 @@ def _derived_version(
 
 def _run_git(repo_dir: Path, *args: str) -> str | None:
     try:
-        result = subprocess.run(
-            ["git", *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3, cwd=str(repo_dir),
-            check=False,
-        )
+        # A Git launcher can leave descendants holding PIPE handles. On Windows,
+        # subprocess.run() then waits indefinitely in its post-timeout communicate().
+        # A temporary file avoids reader-thread joins while preserving bounded output.
+        with tempfile.TemporaryFile() as stdout:
+            result = subprocess.run(
+                ["git", *args], stdout=stdout, stderr=subprocess.DEVNULL, timeout=3, cwd=str(repo_dir),
+                check=False,
+            )
+            stdout.seek(0)
+            value = stdout.read(1024 * 1024).decode('utf-8', errors='replace').strip()
     except (OSError, subprocess.SubprocessError):
         return None
-    value = (result.stdout or "").strip()
     return value if result.returncode == 0 and value else None
 
 
