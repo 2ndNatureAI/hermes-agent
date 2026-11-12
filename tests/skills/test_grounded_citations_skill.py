@@ -539,7 +539,9 @@ def test_render_replace_in_rewrites_block_idempotently(sources_mod, tmp_path: Pa
 
     draft = tmp_path / "d.md"
     draft.write_text(
-        "A claim resting on the first source.[1]\n\n## Sources\n\n[1] https://stale.example\n",
+        "A claim resting on the first source.[1]\n\n"
+        "<!-- grounded-citations:start -->\n## Sources\n\n[1] https://stale.example\n"
+        "<!-- grounded-citations:end -->\n",
         encoding="utf-8",
     )
     assert sources_mod.main(args + ["render", "--style", "evidence", "--replace-in", str(draft)]) == 0
