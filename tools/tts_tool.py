@@ -1507,7 +1507,7 @@ def _repair_ogg_container(file_str: str) -> str:
     honest file instead of a 0-second voice bubble. Returns the (possibly
     updated) path.
     """
-    if not file_str.endswith(".ogg"):
+    if not file_str.lower().endswith(".ogg"):
         return file_str
     container = _sniff_audio_container(file_str)
     if container in ("ogg", "unknown"):
@@ -1775,7 +1775,7 @@ def _generate_elevenlabs(text: str, output_path: str, tts_config: Dict[str, Any]
     model_id = el_config.get("model_id", DEFAULT_ELEVENLABS_MODEL_ID)
 
     # Determine output format based on file extension
-    if output_path.endswith(".ogg"):
+    if output_path.lower().endswith(".ogg"):
         output_format = "opus_48000_64"
     else:
         output_format = "mp3_44100_128"
@@ -1799,11 +1799,11 @@ def _generate_elevenlabs(text: str, output_path: str, tts_config: Dict[str, Any]
 
 def _tts_response_format_from_path(output_path: str) -> str:
     """Pick an OpenAI-compatible TTS response format from the output extension."""
-    if output_path.endswith(".ogg"):
+    if output_path.lower().endswith(".ogg"):
         return "opus"
-    if output_path.endswith(".wav"):
+    if output_path.lower().endswith(".wav"):
         return "wav"
-    if output_path.endswith(".flac"):
+    if output_path.lower().endswith(".flac"):
         return "flac"
     return "mp3"
 
@@ -2170,7 +2170,7 @@ def _generate_xai_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -
 
     # Match the documented minimal POST /v1/tts shape by default. Only send
     # output_format when Hermes actually needs a non-default format/override.
-    codec = "wav" if output_path.endswith(".wav") else "mp3"
+    codec = "wav" if output_path.lower().endswith(".wav") else "mp3"
     payload: Dict[str, Any] = {
         "text": text,
         "voice_id": voice_id,
@@ -2380,11 +2380,11 @@ def _generate_mistral_tts(text: str, output_path: str, tts_config: Dict[str, Any
     # base_url. The Mistral SDK calls it server_url.
     base_url = mi_config.get("base_url")
 
-    if output_path.endswith(".ogg"):
+    if output_path.lower().endswith(".ogg"):
         response_format = "opus"
-    elif output_path.endswith(".wav"):
+    elif output_path.lower().endswith(".wav"):
         response_format = "wav"
-    elif output_path.endswith(".flac"):
+    elif output_path.lower().endswith(".flac"):
         response_format = "flac"
     else:
         response_format = "mp3"
@@ -2828,7 +2828,7 @@ def _generate_neutts(text: str, output_path: str, tts_config: Dict[str, Any]) ->
     # NeuTTS outputs WAV natively — use a .wav path for generation,
     # let the caller convert to the final format afterward.
     wav_path = output_path
-    if not output_path.endswith(".wav"):
+    if not output_path.lower().endswith(".wav"):
         wav_path = output_path.rsplit(".", 1)[0] + ".wav"
 
     synth_script = str(Path(__file__).parent / "neutts_synth.py")
@@ -3047,7 +3047,7 @@ def _generate_piper_tts(text: str, output_path: str, tts_config: Dict[str, Any])
 
     # Piper outputs WAV. Caller handles downstream MP3/Opus conversion.
     wav_path = output_path
-    if not output_path.endswith(".wav"):
+    if not output_path.lower().endswith(".wav"):
         wav_path = output_path.rsplit(".", 1)[0] + ".wav"
 
     with wave.open(wav_path, "wb") as wav_file:
@@ -3117,7 +3117,7 @@ def _generate_kittentts(text: str, output_path: str, tts_config: Dict[str, Any])
     # Save as WAV
     import soundfile as sf
     wav_path = output_path
-    if not output_path.endswith(".wav"):
+    if not output_path.lower().endswith(".wav"):
         wav_path = output_path.rsplit(".", 1)[0] + ".wav"
 
     sf.write(wav_path, audio, 24000)
@@ -3431,11 +3431,11 @@ def _text_to_speech_single(
             # delivery only kicks in when the user explicitly opts in
             # via ``voice_compatible: true`` in their provider config.
             if _is_command_tts_voice_compatible(command_provider_config):
-                if not file_str.endswith(".ogg"):
+                if not file_str.lower().endswith(".ogg"):
                     opus_path = _convert_to_opus(file_str)
                     if opus_path:
                         file_str = opus_path
-                voice_compatible = file_str.endswith(".ogg")
+                voice_compatible = file_str.lower().endswith(".ogg")
         elif provider not in BUILTIN_TTS_PROVIDERS:
             # Plugin-registered provider (issue #30398). Voice-bubble
             # delivery opts in via ``TTSProvider.voice_compatible``
@@ -3443,22 +3443,22 @@ def _text_to_speech_single(
             # already write Opus skip the ffmpeg conversion.
             plugin_voice_compatible = _plugin_provider_is_voice_compatible(provider)
             if plugin_voice_compatible:
-                if not file_str.endswith(".ogg"):
+                if not file_str.lower().endswith(".ogg"):
                     opus_path = _convert_to_opus(file_str)
                     if opus_path:
                         file_str = opus_path
-                voice_compatible = file_str.endswith(".ogg")
+                voice_compatible = file_str.lower().endswith(".ogg")
         elif (
             want_opus
             and provider in {"edge", "neutts", "minimax", "xai", "kittentts", "piper"}
-            and not file_str.endswith(".ogg")
+            and not file_str.lower().endswith(".ogg")
         ):
             opus_path = _convert_to_opus(file_str)
             if opus_path:
                 file_str = opus_path
                 voice_compatible = True
         elif provider in {"elevenlabs", "openai", "mistral", "gemini"}:
-            voice_compatible = want_opus and file_str.endswith(".ogg")
+            voice_compatible = want_opus and file_str.lower().endswith(".ogg")
 
         file_size = os.path.getsize(file_str)
         logger.info("TTS audio saved: %s (%s bytes, provider: %s)", file_str, f"{file_size:,}", provider)
