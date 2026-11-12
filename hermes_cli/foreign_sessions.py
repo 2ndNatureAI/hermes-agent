@@ -122,6 +122,8 @@ def _flatten_blocks(content: Any, *, source: str) -> str:
             continue
         elif btype in ("thinking", "redacted_thinking", "reasoning"):
             continue
+        elif source == "codex" and btype == "input_image":
+            parts.append("[image attachment not imported]")
         elif btype == "image":
             parts.append("[image]")
     return "\n\n".join(p for p in (s.strip() for s in parts) if p)
