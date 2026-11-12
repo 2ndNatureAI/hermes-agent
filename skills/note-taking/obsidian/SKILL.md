@@ -43,6 +43,16 @@ Use `search_files` for both filename and content searches. Prefer this over `gre
 - For filenames, use `search_files` with `target: "files"` and a filename `pattern`.
 - For note contents, use `search_files` with `target: "content"`, the content regex as `pattern`, and `file_glob: "*.md"` when you want to restrict matches to markdown notes.
 
+## Check note references
+
+When asked to check links, the bundled `scripts/note_check.py` can inspect a user-selected, trusted, stable copy of notes without modifying them or using the network. Resolve `skill_dir` from `skill_view`, then run with `terminal`:
+
+```text
+python "<skill_dir>/scripts/note_check.py" "<selected-copy>"
+```
+
+The JSON report includes relative paths, link targets and an input digest; treat those names as private. The default partial scope reports absent targets as `unresolved_in_scope`, not broken. Use `--complete-vault` only for a verified entire vault copy, and review skipped paths and findings manually. This is a limited Markdown/Obsidian parser, not a safety boundary for a hostile or concurrently changing tree; multiline inline code and some aliases or Markdown formatting are not resolved. An exit status of zero means the check ran, not that every link is correct.
+
 ## Create a note
 
 Use `write_file` with the resolved absolute path and the full markdown content. Prefer this over shell heredocs or `echo` because it avoids shell quoting issues and returns structured results.
