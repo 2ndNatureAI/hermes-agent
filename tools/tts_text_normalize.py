@@ -18,7 +18,7 @@ import re
 # rather than leaving a bare "Weather." label that reads abruptly aloud.
 _HEAD = "\x00"
 
-_MD_CODE_BLOCK_RE = re.compile(r"```[\s\S]*?```")
+_MD_CODE_BLOCK_RE = re.compile(r"```[\s\S]*?(?:```|\Z)")
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((?:[^()]|\([^)]*\))*\)")
 _MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\((?:[^()]|\([^)]*\))*\)")
 _MD_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
