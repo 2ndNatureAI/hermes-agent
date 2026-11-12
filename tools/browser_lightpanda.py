@@ -142,7 +142,9 @@ def _cdp_ready(url: str) -> bool:
 def _read_log_tail(path: str) -> str:
     try:
         with open(path, "rb") as fh:
-            data = fh.read()
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - _STDERR_TAIL_LIMIT))
+            data = fh.read(_STDERR_TAIL_LIMIT)
     except OSError:
         return ""
     text = data[-_STDERR_TAIL_LIMIT:].decode("utf-8", errors="replace").strip()
