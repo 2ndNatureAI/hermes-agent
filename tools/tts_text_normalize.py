@@ -32,7 +32,7 @@ _MD_BLOCKQUOTE_RE = re.compile(r"^\s*>\s?", flags=re.MULTILINE)
 _MD_LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+", flags=re.MULTILINE)
 _MD_HR_RE = re.compile(r"^\s*[-*_]{3,}\s*$", flags=re.MULTILINE)
 _MD_TABLE_PIPE_RE = re.compile(r"\s*\|\s*")
-_URL_RE = re.compile(r"https?://\S+")
+_URL_RE = re.compile(r"[ \t]*https?://\S+")
 
 # Broad emoji / pictograph cleanup.  Voice providers vary a lot here; most read
 # emojis as awkward labels, so keep the speech script calm and literal.
@@ -54,6 +54,23 @@ _EMOJI_RE = re.compile(
 _VARIATION_SELECTOR_RE = re.compile("[︎️]")
 
 
+def _strip_url_keep_sentence_end(match: re.Match[str]) -> str:
+    """Silence a URL but retain trailing prose punctuation and unmatched closers."""
+    token = match.group().lstrip()
+    end = len(token)
+    unbalanced = {")": token.count(")") - token.count("("), "]": token.count("]") - token.count("[")}
+    while end:
+        last = token[end - 1]
+        if last in ".,;:!?":
+            end -= 1
+        elif last in unbalanced and unbalanced[last] > 0:
+            unbalanced[last] -= 1
+            end -= 1
+        else:
+            break
+    return token[end:] or " "
+
+
 def strip_markdown_for_tts(text: str) -> str:
     """Strip Markdown/Telegram formatting while preserving readable words."""
     if not text:
@@ -63,7 +80,7 @@ def strip_markdown_for_tts(text: str) -> str:
     text = _MD_CODE_BLOCK_RE.sub(" ", text)
     text = _MD_IMAGE_RE.sub(lambda m: f" {m.group(1)} " if m.group(1) else " ", text)
     text = _MD_LINK_RE.sub(r"\1", text)
-    text = _URL_RE.sub("", text)
+    text = _URL_RE.sub(_strip_url_keep_sentence_end, text)
     text = _MD_INLINE_CODE_RE.sub(r"\1", text)
     text = _MD_BOLD_RE.sub(r"\1", text)
     text = _MD_UNDERSCORE_BOLD_RE.sub(r"\1", text)
