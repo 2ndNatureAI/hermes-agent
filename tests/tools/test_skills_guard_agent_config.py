@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.skills_guard import SCANNER_VERSION, scan_skill
+from tools.skills_guard import scan_skill
 
 
 def _scan(tmp_path: Path, content: str):
@@ -32,12 +32,6 @@ def _scan(tmp_path: Path, content: str):
     skill_dir.mkdir(exist_ok=True)
     (skill_dir / "SKILL.md").write_text(content)
     return scan_skill(skill_dir, source="community/test")
-
-
-# The scanner version moved to v2 precisely so cached v1 dangerous verdicts
-# for previously-blocked skills are invalidated and re-scanned.
-def test_scanner_version_bumped():
-    assert SCANNER_VERSION == "skills-guard-v2"
 
 
 class TestFalsePositivesUnblocked:

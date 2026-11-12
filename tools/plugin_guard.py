@@ -56,7 +56,7 @@ from tools.skills_guard import (
     scan_file,
 )
 
-PLUGIN_SCANNER_VERSION = "plugin-guard-v1"
+PLUGIN_SCANNER_VERSION = "plugin-guard-v2"
 
 # Directories that are never scanned (VCS internals, caches, vendored envs).
 EXCLUDED_DIRS = {
@@ -68,7 +68,7 @@ EXCLUDED_DIRS = {
 # variable" is the NORMAL, documented plugin pattern (provider plugins read
 # their own API keys via requires_env and call their backend with them).
 CODE_FILE_EXTENSIONS = {
-    ".py", ".js", ".ts", ".sh", ".bash", ".rb", ".pl", ".php",
+    ".py", ".js", ".ts", ".sh", ".bash", ".rb", ".pl", ".php", ".bat", ".cmd",
 }
 
 # Pattern ids from skills_guard.THREAT_PATTERNS that are exempt on code
