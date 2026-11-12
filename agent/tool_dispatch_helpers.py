@@ -688,8 +688,7 @@ _UPSTREAM_ELISION_PATTERNS = (
     re.compile(r"data_preview", re.IGNORECASE),
 )
 
-# Results smaller than this can't meaningfully hide an elided enumeration —
-# skip the scan entirely so tiny results pay nothing.
+# Larger textual markers are scanned below; short JSON pagination is checked separately.
 _ELISION_SCAN_MIN_CHARS = 1_000
 
 # Bound the regex scan: markers appear near the elided structure, which for
@@ -697,23 +696,35 @@ _ELISION_SCAN_MIN_CHARS = 1_000
 _ELISION_SCAN_MAX_CHARS = 65_536
 
 _UPSTREAM_ELISION_NOTICE = (
-    '\n[hermes note: this result contains provider-side elision markers '
-    '(e.g. "...N more items" / has_more:true). The data shown is INCOMPLETE '
-    '— page/fetch the remainder before treating any enumeration as complete.]'
+    '\n[hermes note: this result contains a possible provider-side elision marker '
+    '(e.g. "...N more items" / has_more:true). The data shown may be INCOMPLETE. '
+    'Check whether the marker indicates pagination or omitted data and fetch the remainder if needed.]'
 )
 
 
 def _detect_upstream_elision(content: Any) -> bool:
     """True when a string tool result carries provider-side elision markers.
 
-    Cheap and safe by construction: non-string content is never scanned,
-    results under ``_ELISION_SCAN_MIN_CHARS`` short-circuit, and the regex
-    scan is capped at the first ``_ELISION_SCAN_MAX_CHARS`` chars.
+    Non-string content is ignored; short JSON is checked for explicit pagination,
+    and the larger regex scan is capped at ``_ELISION_SCAN_MAX_CHARS``.
     """
     if not isinstance(content, str):
         return False
     if len(content) < _ELISION_SCAN_MIN_CHARS:
-        return False
+        try:
+            obj = json.loads(content)
+            if not isinstance(obj, dict):
+                return False
+            result = obj.get("result")
+            if isinstance(result, str):
+                try:
+                    result = json.loads(result)
+                except (ValueError, RecursionError):
+                    result = None
+            return any(isinstance(item, dict) and item.get("has_more") is True
+                       for item in (obj, obj.get("structuredContent"), result))
+        except (ValueError, RecursionError):
+            return False
     window = content[:_ELISION_SCAN_MAX_CHARS]
     return any(p.search(window) for p in _UPSTREAM_ELISION_PATTERNS)
 
