@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import List, Tuple
 
 
-SCANNER_VERSION = "skills-guard-v2"
+SCANNER_VERSION = "skills-guard-v3"
 
 
 
@@ -679,7 +679,7 @@ MAX_SINGLE_FILE_KB = 256  # individual file > 256KB is suspicious
 SCANNABLE_EXTENSIONS = {
     '.md', '.txt', '.py', '.sh', '.bash', '.js', '.ts', '.rb',
     '.yaml', '.yml', '.json', '.toml', '.cfg', '.ini', '.conf',
-    '.html', '.css', '.xml', '.tex', '.r', '.jl', '.pl', '.php',
+    '.html', '.css', '.xml', '.tex', '.r', '.jl', '.pl', '.php', '.bat', '.cmd',
 }
 
 # Known binary extensions that should NOT be in a skill
@@ -1158,7 +1158,7 @@ def _check_structure(skill_dir: Path, ignore=None) -> List[Finding]:
             ))
 
         # Executable permission on non-script files
-        if ext not in {'.sh', '.bash', '.py', '.rb', '.pl'} and f.stat().st_mode & 0o111:
+        if ext not in {'.sh', '.bash', '.py', '.rb', '.pl', '.bat', '.cmd'} and f.stat().st_mode & 0o111:
             findings.append(Finding(
                 pattern_id="unexpected_executable",
                 severity="medium",
