@@ -46,6 +46,15 @@ and its file list; do not proceed to commit if its scope is uncertain.
 If the staged diff exceeds 15,000 characters, inspect it in per-file sections
 with `git diff --cached -- <path>`. Run the scan on the same staged changes.
 
+### Check staged Python test removals
+
+For staged Python test changes, run `python scripts/staged_test_removals.py /path/to/repo`
+from this skill directory. It compares top-level `test_` functions and class test
+methods with `HEAD` without executing repository code. Review each result: a test
+may have moved or been renamed. Parse failures and unsupported changes are reported
+as incomplete; the check does not assess assertion changes, skipped tests, non-Python
+suites, or whether coverage is adequate. Avoid changing the index during the scan.
+
 ## Step 2 — Static security scan
 
 Scan added lines only. Any match is a security concern fed into Step 5.
