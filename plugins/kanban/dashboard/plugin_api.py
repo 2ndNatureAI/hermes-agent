@@ -47,7 +47,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status as http_status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from hermes_cli import kanban_db
 from hermes_cli import kanban_diagnostics as kd
@@ -619,6 +619,12 @@ class CreateTaskBody(BaseModel):
     # Explicit project link; when omitted, create_task inherits the board's
     # scoped project (if any) so a project-scoped board anchors every task.
     project_id: Optional[str] = None
+
+    @field_validator("max_runtime_seconds", mode="before")
+    @classmethod
+    def validate_runtime_cap(cls, value):
+        from hermes_cli.kanban_duration import normalize_runtime_cap
+        return normalize_runtime_cap(value)
 
 
 @router.post("/tasks")

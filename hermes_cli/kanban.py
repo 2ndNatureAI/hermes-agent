@@ -391,7 +391,8 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
                           help="Per-task runtime cap. Accepts seconds (300) or "
                                "durations (90s, 30m, 2h, 1d). When exceeded, "
                                "the dispatcher SIGTERMs (then SIGKILLs) the worker "
-                               "and re-queues the task.")
+                               "and re-queues the task. Must be at least one whole "
+                               "second; omit it for no cap.")
     p_create.add_argument("--created-by", default="user",
                           help="Author name recorded on the task (default: user)")
     p_create.add_argument("--skill", action="append", default=[], dest="skills",
@@ -1552,23 +1553,8 @@ def _parse_duration(val) -> Optional[int]:
     Returns None for empty input. Raises ValueError on malformed input so
     the CLI can surface a usage error cleanly.
     """
-    if val is None or val == "":
-        return None
-    s = str(val).strip().lower()
-    # Bare integer → seconds.
-    try:
-        return int(s)
-    except ValueError:
-        pass
-    # Suffixed form.
-    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-    if s and s[-1] in units:
-        try:
-            n = float(s[:-1])
-        except ValueError as exc:
-            raise ValueError(f"malformed duration {val!r}") from exc
-        return int(n * units[s[-1]])
-    raise ValueError(f"malformed duration {val!r} (expected 30s, 5m, 2h, 1d, or a number)")
+    from hermes_cli.kanban_duration import parse_duration
+    return parse_duration(val)
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
