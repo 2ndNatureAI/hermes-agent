@@ -344,6 +344,17 @@ def _is_lightpanda_process(pid: int, port, start_time) -> bool:
     return True
 
 
+def _record_pid(value) -> Optional[int]:
+    """Parse a positive OS PID from a potentially damaged JSON record."""
+    if type(value) is int:
+        pid = value
+    elif isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 10:
+        pid = int(value)
+    else:
+        return None
+    return pid if 0 < pid <= 2**31 - 1 else None
+
+
 def reap_orphaned_lightpanda() -> int:
     """Kill ``lightpanda serve`` processes whose owning Hermes is gone.
 
@@ -370,21 +381,29 @@ def reap_orphaned_lightpanda() -> int:
         except (OSError, ValueError):
             record_path.unlink(missing_ok=True)
             continue
-        owner_pid = record.get("owner_pid")
-        if owner_pid == os.getpid():
-            with _servers_lock:
-                if session_name in _servers:
-                    continue
-        elif owner_pid and _pid_exists(int(owner_pid)):
+        if not isinstance(record, dict):
             continue
-        pid = record.get("pid")
-        if not pid or not _is_lightpanda_process(int(pid), record.get("port"), record.get("start_time")):
+        owner_pid = _record_pid(record.get("owner_pid"))
+        if owner_pid is None or owner_pid == os.getpid():
+            # Records are written before the local server registry is populated.
+            continue
+        try:
+            if _pid_exists(owner_pid):
+                continue
+        except (OSError, ValueError, OverflowError):
+            logger.debug("could not check lightpanda owner pid %s", owner_pid, exc_info=True)
+            continue
+        raw_pid = record.get("pid")
+        pid = _record_pid(raw_pid)
+        if raw_pid is not None and pid is None:
+            continue
+        if not pid or not _is_lightpanda_process(pid, record.get("port"), record.get("start_time")):
             record_path.unlink(missing_ok=True)
             continue
         try:
             from tools.process_registry import ProcessRegistry
 
-            ProcessRegistry._terminate_host_pid(int(pid), expected_start=record.get("start_time"))
+            ProcessRegistry._terminate_host_pid(pid, expected_start=record.get("start_time"))
             reaped += 1
             logger.info("Reaped orphaned lightpanda serve pid %s (session %s)", pid, session_name)
         except Exception as e:
