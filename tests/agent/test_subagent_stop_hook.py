@@ -220,6 +220,20 @@ class TestBatchMode:
 
 
 class TestPayloadShape:
+    def test_scheme_relative_url_is_sanitized_before_real_hook(self):
+        captured = _register_capturing_hook()
+        with patch("tools.delegate_tool._run_single_child") as mock_run:
+            mock_run.return_value = {
+                "task_index": 0, "status": "completed", "summary": "ok",
+                "api_calls": 1, "duration_seconds": 0.1,
+                "tool_trace": [{"tool": "browser", "status": "ok", "input_summary": {
+                    "argument_keys": ["url"], "targets": {
+                        "url": "//user:SYNTHETIC_SECRET_421@example.test/path?key=SYNTHETIC_SECRET_421"}}}],
+            }
+            delegate_task(goal="do X", parent_agent=_make_parent())
+        assert captured[0]["tool_call_history"][0]["tool_input"]["targets"]["url"] == "//example.test/path"
+        assert "SYNTHETIC_SECRET_421" not in str(captured[0]["tool_call_history"])
+
     def test_includes_redacted_tool_call_history(self):
         captured = _register_capturing_hook()
 

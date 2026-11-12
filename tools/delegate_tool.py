@@ -751,24 +751,31 @@ def _sanitize_tool_target(key: str, value: Any) -> Any:
         return cleaned or None
     if not isinstance(value, str) or not value:
         return None
+    # Truncating before parsing can turn URL userinfo into an apparent host.
+    if key in _TOOL_INPUT_URL_KEYS and len(value) > 1024:
+        return None
     bounded = value[:1024]
     if key in _TOOL_INPUT_URL_KEYS:
         try:
             parsed = urlsplit(bounded)
-            if parsed.scheme and parsed.netloc:
+            if parsed.netloc and (parsed.scheme or bounded.startswith("//")):
                 hostname = parsed.hostname
-                if not hostname:
+                if not hostname or "%" in hostname:
                     return None
                 # ``SplitResult.netloc`` includes ``user:password@``. Rebuild
                 # the authority from parsed host/port so hook-visible history
                 # cannot carry URL credentials. Bracket IPv6 literals before
                 # appending a validated port.
-                host = f"[{hostname}]" if ":" in hostname else hostname
+                bracketed = parsed.netloc.rsplit("@", 1)[-1].startswith("[")
+                host = f"[{hostname}]" if ":" in hostname or bracketed else hostname
                 port = parsed.port
                 netloc = f"{host}:{port}" if port is not None else host
                 return urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
+            if bounded.startswith("/") and not bounded.startswith("//") and not parsed.scheme:
+                return parsed.path
         except ValueError:
             return None
+        return None
     return bounded
 
 
