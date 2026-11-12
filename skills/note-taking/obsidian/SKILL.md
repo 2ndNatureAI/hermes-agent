@@ -33,7 +33,7 @@ Use `read_file` with the resolved absolute path to the note. Prefer this over `c
 
 Use `search_files` with `target: "files"` and the resolved vault path. Prefer this over `find` or `ls`.
 
-- To list all markdown notes, use `pattern: "*.md"` under the vault path.
+- To list markdown notes, use `pattern: "*.md"` under the vault path. Search returns up to 50 results by default; when the result is truncated, follow its offset guidance or narrow the scope. Do not describe a bounded, interrupted, or filtered result as a complete vault inventory.
 - To list a subfolder, search under that subfolder's absolute path.
 
 ## Search
