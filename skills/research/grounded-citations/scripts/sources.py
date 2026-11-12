@@ -83,6 +83,9 @@ def normalize_url(url: str) -> str:
     u = (url or "").strip()
     if "#" in u:
         u = u.split("#", 1)[0]
+    # A trailing slash in a query value is content, not a path delimiter.
+    if "?" in u:
+        return u
     stripped = u.rstrip("/")
     return stripped or u
 
