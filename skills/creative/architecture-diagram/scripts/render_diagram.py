@@ -8,6 +8,7 @@ import html
 import json
 import math
 import sys
+import unicodedata
 from pathlib import Path
 
 
@@ -17,6 +18,46 @@ def _text(value: object, field: str, *, required: bool = True) -> str:
     if len(value) > 500:
         raise ValueError(f"{field} exceeds 500 characters")
     return value.strip()
+
+
+def _label_width(text: str) -> float:
+    # Approximate sans-serif glyph widths in ems so wide letters and CJK wrap sooner.
+    return sum(
+        0 if unicodedata.combining(ch) else
+        1.0 if unicodedata.east_asian_width(ch) in {"W", "F"} or ch in "MWmw@%" else
+        0.3 if ch in "ilI1.,:;!| '" or ch == chr(34) else
+        0.75 if ch.isupper() else 0.6
+        for ch in text
+    )
+
+
+def _label_lines(label: str) -> list[str]:
+    limit = 14.0  # approximately 210px at the diagram's 15px font size
+    lines: list[str] = []
+    line = ""
+    for word in label.split():
+        candidate = f"{line} {word}" if line else word
+        if _label_width(candidate) <= limit:
+            line = candidate
+            continue
+        if line:
+            lines.append(line)
+            line = ""
+        while word and _label_width(word) > limit:
+            end = 1
+            while end < len(word) and _label_width(word[:end + 1]) <= limit:
+                end += 1
+            lines.append(word[:end])
+            word = word[end:]
+        line = word
+    if line:
+        lines.append(line)
+    if len(lines) > 3:
+        final = lines[2]
+        while final and _label_width(final + "…") > limit:
+            final = final[:-1]
+        lines = [*lines[:2], final.rstrip() + "…"]
+    return lines
 
 
 def render(graph: object, theme: str, columns: int = 3) -> str:
@@ -48,10 +89,15 @@ def render(graph: object, theme: str, columns: int = 3) -> str:
         x, y = 40 + (index % cols) * 300, 40 + (index // cols) * 170
         positions[identifier] = (x, y, label)
         label_html = html.escape(label)
-        fit = ' textLength="214" lengthAdjust="spacingAndGlyphs"' if len(label) > 27 else ""
+        lines = _label_lines(label)
+        baseline = y + 43 - 9 * (len(lines) - 1)
+        spans = "".join(
+            f'<tspan x="{x + 120}" dy="{0 if line_number == 0 else 18}">{html.escape(line)}</tspan>'
+            for line_number, line in enumerate(lines)
+        )
         rendered_nodes.append(
             f'<g><title>{label_html}</title><rect x="{x}" y="{y}" width="240" height="76" rx="8"/>'
-            f'<text x="{x + 120}" y="{y + 43}" text-anchor="middle"{fit}>{label_html}</text></g>'
+            f'<text x="{x + 120}" y="{baseline}" text-anchor="middle">{spans}</text></g>'
         )
         details = f": {html.escape(description)}" if description else ""
         accessible_nodes.append(f"<li>{label_html}{details}</li>")
