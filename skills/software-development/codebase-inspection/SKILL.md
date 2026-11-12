@@ -35,6 +35,7 @@ From this skill directory, run:
 
 ```bash
 python scripts/import_inventory.py /path/to/repo
+python scripts/import_inventory.py /path/to/repo.zip
 ```
 
 The JSON output lists files and their import names without executing source or
@@ -52,6 +53,14 @@ parse failures, JavaScript/TypeScript lines over 4,096 characters, and exceeded
 limits are reported as incomplete. Link checks are
 not atomic against concurrent filesystem changes; inspect untrusted repositories
 in an isolated, stable workspace.
+
+ZIP support reads eligible source members directly without extraction or code execution.
+It rejects ZIP64 and multidisk archives, more than 5,000 members, a central directory
+larger than 4 MiB, and archives larger than 512 MiB. It reads at most 32 MiB of
+eligible uncompressed source in total; unsafe paths, links, encrypted or unsupported
+compression, and limits are reported as incomplete. Treat archived source and paths as
+untrusted, and keep the input archive stable while scanning. An import inventory is not
+an evaluation, security review, dependency resolution or implementation.
 
 ## 1. Basic Summary (Most Common)
 

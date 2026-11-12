@@ -149,7 +149,11 @@ def main() -> int:
     if not 1 <= args.max_files <= 10000 or not 1 <= args.max_file_bytes <= 1048576:
         parser.error("limits must be within 1-10000 files and 1-1048576 bytes per file")
     try:
-        result = inventory(args.repository, args.max_files, args.max_file_bytes)
+        if args.repository.is_file():
+            from zip_import_inventory import inventory_zip
+            result = inventory_zip(args.repository, args.max_files, args.max_file_bytes)
+        else:
+            result = inventory(args.repository, args.max_files, args.max_file_bytes)
     except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
