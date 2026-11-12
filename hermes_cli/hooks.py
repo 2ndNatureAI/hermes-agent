@@ -421,6 +421,10 @@ def _doctor_one(spec, shell_hooks) -> int:
         elif result.get("error"):
             problems += 1
             print(f"      ✗ execution error: {result['error']}")
+        elif result.get("returncode") != 0:
+            problems += 1
+            print(f"      ⚠ synthetic hook exited nonzero (exit={result.get('returncode')}); "
+                  "inspect `hermes hooks test` to distinguish an intended block from a failure")
         else:
             rc = result.get("returncode")
             elapsed = result.get("elapsed_seconds", 0)
