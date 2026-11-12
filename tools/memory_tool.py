@@ -774,8 +774,8 @@ class MemoryStore:
     def _read_raw_checked(path: Path) -> Tuple[str, bool]:
         """Read a memory file's raw text, distinguishing unreadable from empty.
 
-        Returns ``(raw, read_ok)``. ``read_ok`` is False ONLY when the file
-        EXISTS but could not be read — an absent file is a clean ``("", True)``.
+        Returns ``(raw, read_ok)``. ``read_ok`` is False when reading fails or
+        absence cannot be established — an absent file is a clean ``("", True)``.
         Invalid UTF-8 counts as unreadable too: the bytes on disk hold content
         we cannot faithfully round-trip, so a rewrite would corrupt or discard
         it just like a failed read. Read-modify-write callers must treat
@@ -787,8 +787,6 @@ class MemoryStore:
         No file locking needed: _write_file uses atomic rename, so readers
         always see either the previous complete file or the new complete file.
         """
-        if not path.exists():
-            return "", True
         try:
             # utf-8-sig strips a leading UTF-8 BOM (Notepad-edited memory
             # files on Windows) and is byte-identical to utf-8 otherwise.
@@ -799,6 +797,15 @@ class MemoryStore:
             # save persists over the real bytes — the wipe class documented
             # above. Undecodable bytes must surface as read_ok=False.
             return path.read_text(encoding="utf-8-sig"), True
+        except FileNotFoundError:
+            # A dangling link or unavailable metadata is not proof of absence.
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                return "", True
+            except OSError:
+                return "", False
+            return "", False
         except (OSError, IOError, UnicodeDecodeError):
             return "", False
 
