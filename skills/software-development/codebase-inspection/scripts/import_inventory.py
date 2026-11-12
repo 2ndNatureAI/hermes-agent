@@ -145,9 +145,12 @@ def main() -> int:
     parser.add_argument("repository", type=Path)
     parser.add_argument("--max-files", type=int, default=2000)
     parser.add_argument("--max-file-bytes", type=int, default=262144)
+    parser.add_argument("--find-module", help="show exact, case-sensitive import matches while retaining incomplete files")
     args = parser.parse_args()
     if not 1 <= args.max_files <= 10000 or not 1 <= args.max_file_bytes <= 1048576:
         parser.error("limits must be within 1-10000 files and 1-1048576 bytes per file")
+    if args.find_module is not None and (not args.find_module.strip() or len(args.find_module) > 500):
+        parser.error("--find-module must contain 1 to 500 nonblank characters")
     try:
         if args.repository.is_file():
             from zip_import_inventory import inventory_zip
@@ -157,6 +160,16 @@ def main() -> int:
     except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    if args.find_module is not None:
+        examined = len(result["files"])
+        matches = []
+        for entry in result["files"]:
+            hits = [item for item in entry["imports"] if item["module"] == args.find_module]
+            if hits or entry["status"] != "ok" or entry.get("imports_truncated"):
+                matches.append({**entry, "imports": hits})
+        result["find_module"] = {"query": args.find_module, "examined_files": examined,
+                                 "matching_files": sum(bool(item["imports"]) for item in matches)}
+        result["files"] = matches
     print(json.dumps(result, ensure_ascii=True, indent=2))
     return 0
 
