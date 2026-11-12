@@ -105,7 +105,7 @@ DEFAULT_PROJECT_NAME = "Hermes Agent"
 DEFAULT_POLL_INTERVAL = 5
 DEFAULT_POLL_TIMEOUT = 1800  # 30 min, matching the CLI's fallback
 
-E164_RE = re.compile(r"^\+[1-9]\d{6,14}$")
+E164_RE = re.compile(r"\+[1-9][0-9]{6,14}\Z")
 
 
 # ---------------------------------------------------------------------------
@@ -833,6 +833,25 @@ def _normalize_phone(phone: str) -> str:
     return re.sub(r"[^\d+]", "", phone or "")
 
 
+def _validate_operator_phone(phone_number: str) -> None:
+    if not isinstance(phone_number, str) or not E164_RE.fullmatch(phone_number):
+        raise ValueError("phone_number must be E.164 (e.g. +15551234567)")
+
+
+def _lookup_operator_phone(phone_number: str) -> str:
+    """Accept common ASCII separators for matching an existing operator only."""
+    if (not isinstance(phone_number, str) or len(phone_number) > 64 or
+            not re.fullmatch(r"\+[1-9][0-9 .()\-]*[0-9]", phone_number)):
+        raise ValueError("phone_number must be E.164 (e.g. +15551234567)")
+    if phone_number.count("(") != phone_number.count(")") or phone_number.count("(") > 1:
+        raise ValueError("phone_number must be E.164 (e.g. +15551234567)")
+    if "(" in phone_number and not re.search(r"\([0-9]{1,4}\)", phone_number):
+        raise ValueError("phone_number must be E.164 (e.g. +15551234567)")
+    canonical = re.sub(r"[ .()\-]", "", phone_number)
+    _validate_operator_phone(canonical)
+    return canonical
+
+
 def list_users(project_id: str, project_secret: str) -> List[Dict[str, Any]]:
     """GET Spectrum Cloud ``/projects/{id}/users/`` → ``SpectrumUser[]``."""
     if httpx is None:
@@ -865,12 +884,9 @@ def create_user(
     send_invite: bool = False,
 ) -> Dict[str, Any]:
     """POST Spectrum Cloud ``/projects/{id}/users/`` and return the user."""
+    _validate_operator_phone(phone_number)
     if httpx is None:
         raise RuntimeError("httpx is required for Photon user creation")
-    if not E164_RE.match(phone_number):
-        raise ValueError(
-            f"phone_number must be E.164 (e.g. +15551234567); got {phone_number!r}"
-        )
     url = f"{_spectrum_host()}/projects/{project_id}/users/"
     body: Dict[str, Any] = {"type": "shared", "phoneNumber": phone_number}
     if send_invite:
@@ -912,7 +928,8 @@ def register_user_if_absent(
     same phone number already exists (the official CLI does no dedup, so we
     add it here to make ``setup`` safely re-runnable).
     """
-    existing = find_user_by_phone(project_id, project_secret, phone_number)
+    lookup_phone = _lookup_operator_phone(phone_number)
+    existing = find_user_by_phone(project_id, project_secret, lookup_phone)
     if existing is not None:
         return existing, False
     user = create_user(
