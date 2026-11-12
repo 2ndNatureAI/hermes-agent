@@ -738,6 +738,20 @@ def _maybe_append_elision_notice(name: str, content: Any) -> Any:
     """
     if not _is_untrusted_tool(name):
         return content
+    if isinstance(content, list):
+        remaining = _ELISION_SCAN_MAX_CHARS
+        for index, item in enumerate(content[:32]):
+            if not (isinstance(item, dict) and item.get("type") == "text"
+                    and isinstance(item.get("text"), str)):
+                continue
+            window = item["text"][:remaining]
+            if _detect_upstream_elision(window):
+                return [*content[:index], {**item, "text": item["text"] + _UPSTREAM_ELISION_NOTICE},
+                        *content[index + 1:]]
+            remaining -= len(window)
+            if remaining <= 0:
+                break
+        return content
     if _detect_upstream_elision(content):
         return content + _UPSTREAM_ELISION_NOTICE
     return content
