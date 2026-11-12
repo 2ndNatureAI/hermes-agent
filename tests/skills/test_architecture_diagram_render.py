@@ -86,3 +86,42 @@ def test_columns_create_vertical_or_wider_grid(tmp_path):
 def test_invalid_columns_do_not_create_output(tmp_path):
     result, output = render(tmp_path, {"nodes": [{"id": "a", "label": "A"}]}, "--columns", "0")
     assert result.returncode != 0 and not output.exists()
+
+
+def test_long_component_labels_are_multiline_and_preserve_full_text(tmp_path):
+    import xml.etree.ElementTree as ET
+
+    label = 'Permission aware context engine with reviewable audit records'
+    result, output = render(tmp_path, {'nodes': [{'id': 'engine', 'label': label}]})
+    assert result.returncode == 0, result.stderr
+    document = output.read_text(encoding='utf-8')
+    svg_text = document[document.index('<svg '):document.index('</svg>') + len('</svg>')]
+    svg = ET.fromstring(svg_text)
+    spans = svg.findall('.//tspan')
+    assert 2 <= len(spans) <= 3
+    assert ' '.join(span.text for span in spans) == label
+    assert all(len(span.text) <= 27 for span in spans)
+    assert label in document
+
+
+def test_extreme_component_label_has_visible_ellipsis_and_full_accessible_label(tmp_path):
+    label = 'Long component description ' * 12
+    result, output = render(tmp_path, {'nodes': [{'id': 'long', 'label': label}]})
+    assert result.returncode == 0, result.stderr
+    document = output.read_text(encoding='utf-8')
+    assert '…</tspan>' in document
+    assert label.strip() in document
+
+
+def test_wide_unbroken_labels_wrap_before_overflow(tmp_path):
+    import xml.etree.ElementTree as ET
+
+    label = 'W' * 27
+    result, output = render(tmp_path, {'nodes': [{'id': 'wide', 'label': label}]})
+    assert result.returncode == 0, result.stderr
+    document = output.read_text(encoding='utf-8')
+    svg_text = document[document.index('<svg '):document.index('</svg>') + len('</svg>')]
+    lines = [span.text for span in ET.fromstring(svg_text).findall('.//tspan')]
+    assert len(lines) == 2
+    assert ''.join(lines) == label
+    assert all(len(line) <= 14 for line in lines)
