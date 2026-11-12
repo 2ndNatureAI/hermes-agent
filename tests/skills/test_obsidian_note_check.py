@@ -189,3 +189,17 @@ class Tests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_backslash_escaped_wikilinks_are_not_reported(tmp_path):
+    note = tmp_path / 'Examples.md'
+    note.write_text(
+        chr(92) + '[[Escaped]]\n'
+        + chr(92) * 3 + '[[AlsoEscaped]]\n'
+        + chr(92) * 2 + '[[Live]]\n'
+        + chr(92) + '![[StillALink]]\n',
+        encoding='utf-8',
+    )
+    report = inspect(tmp_path)
+    assert report['link_count'] == 2
+    assert {item['target'] for item in report['findings']} == {'Live', 'StillALink'}
