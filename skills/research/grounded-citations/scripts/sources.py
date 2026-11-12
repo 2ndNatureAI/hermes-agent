@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import sys
@@ -44,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _hermes_home import get_hermes_home  # noqa: E402
 
 SCHEMA_VERSION = 1
+logger = logging.getLogger(__name__)
 
 # A citation marker in prose: [12].  Markdown links ([text](url)) and
 # reference-style labels are excluded by requiring digits only and no
@@ -105,12 +107,10 @@ def save_ledger(path: Path, data: dict[str, Any]) -> None:
 
 
 class _LedgerLock:
-    """Best-effort cross-process lock (O_EXCL lockfile, stdlib only).
+    """Serialize cooperating ledger writers; timeout never evicts a lock.
 
-    Parallel subagents can share one ledger via --ledger; without a lock two
-    concurrent ``add`` calls can assign the same id.  Falls through after the
-    timeout rather than blocking a task forever — a stale lock must never
-    wedge the ledger.
+    After a crashed owner, confirm no writer remains before removing its lock.
+    This does not defend against a process changing the directory directly.
     """
 
     def __init__(self, path: Path, timeout: float = 5.0) -> None:
@@ -127,24 +127,31 @@ class _LedgerLock:
                 return self
             except FileExistsError:
                 if time.monotonic() >= deadline:
-                    # Assume a stale lock from a crashed run.
-                    try:
-                        self.lock_path.unlink()
-                    except OSError:
-                        return self
-                    continue
+                    raise TimeoutError("Citation ledger is locked; inspect the lock before retrying") from None
                 time.sleep(0.05)
 
     def __exit__(self, *_exc: object) -> None:
-        if self.fd is not None:
-            try:
-                os.close(self.fd)
-            except OSError:
-                pass
+        if self.fd is None:
+            return
         try:
-            self.lock_path.unlink()
+            held = os.fstat(self.fd)
+            current = self.lock_path.lstat()
+            if (held.st_ino and current.st_ino and
+                    (held.st_dev, held.st_ino) == (current.st_dev, current.st_ino)):
+                os.close(self.fd)
+                self.fd = None
+                self.lock_path.unlink()
+            else:
+                logger.warning("Citation lock cleanup could not be verified; inspect the lock before retrying.")
         except OSError:
-            pass
+            logger.warning("Citation lock cleanup could not be verified; inspect the lock before retrying.")
+        finally:
+            if self.fd is not None:
+                try:
+                    os.close(self.fd)
+                except OSError:
+                    logger.warning("Citation lock handle could not be closed; inspect before retrying.")
+                self.fd = None
 
 
 # ---------------------------------------------------------------------------

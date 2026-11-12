@@ -52,6 +52,12 @@ Retrieval comes from whatever is configured: `web_search`, `web_extract`,
 
 Ledger location: `$HERMES_HOME/cache/citations/ledger.json` (profile-aware).
 Override per task with `--ledger <path>` or `HERMES_CITATION_LEDGER`.
+Each lock acquisition waits briefly and fails without making that acquisition's write if the lock is held.
+`ingest` acquires the lock separately for each URL: a later timeout can leave earlier URLs saved. Inspect
+`list` before retrying the same input; normalized `add`/`ingest` entries are idempotent. Do not reset the
+ledger to retry. A lock can remain after a crash or on a filesystem where its identity cannot be checked.
+Before manually removing the adjacent `.lock` file, confirm no writer is active. All cooperating writers
+must use the corrected lock implementation; older versions can evict another writer's live lock.
 
 ## How to Run
 
