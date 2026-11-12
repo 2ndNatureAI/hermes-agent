@@ -137,3 +137,27 @@ def test_zip_stops_at_total_uncompressed_source_limit(tmp_path, monkeypatch):
     report = zip_import_inventory.inventory_zip(archive, 10, 100)
     assert not report["complete"] and report["total_source_limit_reached"]
     assert [row["path"] for row in report["files"]] == ["a.py"]
+
+
+def test_find_module_filters_matches_but_keeps_incomplete_files(tmp_path):
+    (tmp_path / "a.py").write_text("import os\nimport json\n", encoding="utf-8")
+    (tmp_path / "b.py").write_text("import json\n", encoding="utf-8")
+    (tmp_path / "broken.py").write_text("def (", encoding="utf-8")
+    result, report = run(tmp_path, "--find-module", "os")
+    assert result.returncode == 0 and not report["complete"]
+    assert report["find_module"] == {"query": "os", "examined_files": 3, "matching_files": 1}
+    files = {row["path"]: row for row in report["files"]}
+    assert set(files) == {"a.py", "broken.py"}
+    assert [i["module"] for i in files["a.py"]["imports"]] == ["os"]
+    assert files["broken.py"]["status"] == "parse_error"
+
+
+def test_find_module_works_on_zip_and_is_case_sensitive(tmp_path):
+    archive = tmp_path / "bank.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("a.py", "import os\n")
+        z.writestr("b.js", "import 'os';\n")
+    result, report = run(archive, "--find-module", "OS")
+    assert result.returncode == 0 and report["complete"] and not report["files"]
+    result, report = run(archive, "--find-module", "os")
+    assert result.returncode == 0 and report["find_module"]["matching_files"] == 2

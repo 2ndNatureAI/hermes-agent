@@ -36,6 +36,7 @@ From this skill directory, run:
 ```bash
 python scripts/import_inventory.py /path/to/repo
 python scripts/import_inventory.py /path/to/repo.zip
+python scripts/import_inventory.py /path/to/repo.zip --find-module requests
 ```
 
 The JSON output lists files and their import names without executing source or
@@ -44,6 +45,9 @@ JavaScript/TypeScript imports use a text heuristic and may miss or misidentify
 imports. The output does not resolve dependency versions or establish runtime
 behavior. `complete` means the eligible files encountered within the stated
 limits were read and parsed; it does not guarantee every import was found.
+`--find-module` filters to exact, case-sensitive import names after the same bounded
+scan. Its output retains files with parse/coverage failures and reports how many
+files were examined and matched; an incomplete scan cannot establish absence.
 
 By default the tool reads at most 2,000 source files, 10,000 directories, and 262,144 bytes per file,
 and excludes common dependency, build, and cache directories. Adjust the bounds
