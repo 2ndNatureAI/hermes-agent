@@ -158,6 +158,14 @@ def _find_links(notes, files, complete):
     checked = 0
     for src, note in sorted(notes.items()):
         for m in LINK.finditer(note["text"]):
+            # An odd run of backslashes escapes the first bracket. An escaped
+            # embed marker alone does not escape the following wikilink.
+            opening = m.start() + (1 if m.group(2) is not None else 0)
+            backslash = opening - 1
+            while backslash >= 0 and note["text"][backslash] == "\\":
+                backslash -= 1
+            if (opening - backslash - 1) % 2:
+                continue
             raw = m.group(1) or m.group(2)
             target = unquote(raw.split("|", 1)[0].strip())
             dest, sep, anchor = target.partition("#")
