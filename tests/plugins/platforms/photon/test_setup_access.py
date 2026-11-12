@@ -71,7 +71,7 @@ def test_setup_hint_uses_gateway_service_command(monkeypatch: pytest.MonkeyPatch
     rc = cli._cmd_setup(
         argparse.Namespace(
             project_name=None,
-            phone="+155****4567",
+            phone="+15551234567",
             first_name=None,
             last_name=None,
             email=None,
@@ -126,7 +126,7 @@ def test_setup_reuses_valid_existing_secret(
     rc = cli._cmd_setup(
         argparse.Namespace(
             project_name=None,
-            phone="+155****4567",
+            phone="+15551234567",
             first_name=None,
             last_name=None,
             email=None,
@@ -179,7 +179,7 @@ def test_setup_regenerates_when_existing_secret_invalid(
     rc = cli._cmd_setup(
         argparse.Namespace(
             project_name=None,
-            phone="+155****4567",
+            phone="+15551234567",
             first_name=None,
             last_name=None,
             email=None,

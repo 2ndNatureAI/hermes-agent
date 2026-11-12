@@ -154,6 +154,12 @@ def _run_device_login(args: argparse.Namespace) -> int:
 
 
 def _cmd_setup(args: argparse.Namespace) -> int:
+    if args.phone:
+        try:
+            photon_auth._lookup_operator_phone(args.phone)
+        except ValueError as e:
+            print(f"      invalid phone number: {e}", file=sys.stderr)
+            return 1
     # 1. Login (skip if we already have a valid token).
     token = photon_auth.load_photon_token()
     if token:
