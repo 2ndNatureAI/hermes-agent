@@ -167,7 +167,13 @@ def _find_links(notes, files, complete):
             if (opening - backslash - 1) % 2:
                 continue
             raw = m.group(1) or m.group(2)
-            target = unquote(raw.split("|", 1)[0].strip())
+            before_alias, separator, _ = raw.partition("|")
+            if separator:
+                # Obsidian tables escape the alias separator as \|.
+                trailing_slashes = len(before_alias) - len(before_alias.rstrip("\\"))
+                if trailing_slashes % 2:
+                    before_alias = before_alias[:-1]
+            target = unquote(before_alias.strip())
             dest, sep, anchor = target.partition("#")
             checked += 1
             status = "resolved"
