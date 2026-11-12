@@ -1,7 +1,7 @@
 ---
 name: requesting-code-review
 description: "Pre-commit review: security scan, quality gates, auto-fix."
-version: 2.0.0
+version: 2.0.1
 author: Hermes Agent (adapted from obra/superpowers + MorAlekss)
 license: MIT
 platforms: [linux, macos, windows]
@@ -32,20 +32,19 @@ quality gates, an independent reviewer subagent, and an auto-fix loop.
 
 ## Step 1 — Get the diff
 
-```bash
-git diff --cached
-```
+Inspect `git status --short`, `git diff --cached` and `git diff` to identify
+the intended changes, including untracked files. Never substitute the previous
+commit for an empty current diff. If there is no current work, report that.
 
-If empty, try `git diff` then `git diff HEAD~1 HEAD`.
+Before running the staged-diff checks below, stage only the intended files or
+hunks. Preserve pre-existing staged and unstaged work. If unrelated changes are
+already staged, use an isolated worktree for the task instead of altering or
+committing someone else's index. If a file mixes task and unrelated changes,
+use selective staging or an isolated worktree. Review the complete staged diff
+and its file list; do not proceed to commit if its scope is uncertain.
 
-If `git diff --cached` is empty but `git diff` shows changes, tell the user to
-`git add <files>` first. If still empty, run `git status` — nothing to verify.
-
-If the diff exceeds 15,000 characters, split by file:
-```bash
-git diff --name-only
-git diff HEAD -- specific_file.py
-```
+If the staged diff exceeds 15,000 characters, inspect it in per-file sections
+with `git diff --cached -- <path>`. Run the scan on the same staged changes.
 
 ## Step 2 — Static security scan
 
@@ -70,44 +69,49 @@ git diff --cached | grep "^+" | grep -E "execute\(f\"|\.format\(.*SELECT|\.forma
 
 ## Step 3 — Baseline tests and linting
 
-Detect the project language and run the appropriate tools. Capture the failure
-count BEFORE your changes as **baseline_failures** (stash changes, run, pop).
-Only NEW failures introduced by your changes block the commit.
+Detect the project language and run the appropriate tools. When a baseline is
+needed, use a separate clean worktree at the relevant base revision; don't stash
+or reset another person's work. Compare the failures themselves, not only their
+counts. If the baseline cannot be run, report the uncertainty.
+
+Use the repository's documented test and lint commands when available. Otherwise,
+choose the appropriate commands below. Preserve their exit status and enough
+output to identify failures; a truncated summary is not a pass.
 
 **Test frameworks** (auto-detect by project files):
 ```bash
 # Python (pytest)
-python -m pytest --tb=no -q 2>&1 | tail -5
+python -m pytest --tb=short -q
 
 # Node (npm test)
-npm test -- --passWithNoTests 2>&1 | tail -5
+npm test
 
 # Rust
-cargo test 2>&1 | tail -5
+cargo test
 
 # Go
-go test ./... 2>&1 | tail -5
+go test ./...
 ```
 
 **Linting and type checking** (run only if installed):
 ```bash
 # Python
-which ruff && ruff check . 2>&1 | tail -10
-which mypy && mypy . --ignore-missing-imports 2>&1 | tail -10
+which ruff && ruff check .
+which mypy && mypy . --ignore-missing-imports
 
 # Node
-which npx && npx eslint . 2>&1 | tail -10
-which npx && npx tsc --noEmit 2>&1 | tail -10
+which npx && npx eslint .
+which npx && npx tsc --noEmit
 
 # Rust
-cargo clippy -- -D warnings 2>&1 | tail -10
+cargo clippy -- -D warnings
 
 # Go
-which go && go vet ./... 2>&1 | tail -10
+which go && go vet ./...
 ```
 
-**Baseline comparison:** If baseline was clean and your changes introduce failures,
-that's a regression. If baseline already had failures, only count NEW ones.
+**Baseline comparison:** Identify new failures relative to the base. A matching
+failure count does not establish that the same tests failed.
 
 ## Step 4 — Self-review checklist
 
@@ -222,15 +226,17 @@ Fix each issue precisely. Describe what you changed and why.""",
 After the fix agent completes, re-run Steps 1-6 (full verification cycle).
 - Passed: proceed to Step 8
 - Failed and attempts < 2: repeat Step 7
-- Failed after 2 attempts: escalate to user with the remaining issues and
-  suggest `git stash` or `git reset` to undo
+- Failed after 2 attempts: report the remaining issues without resetting or
+  stashing unrelated work.
 
 ## Step 8 — Commit
 
-If verification passed:
+If verification passed and a commit is part of the requested task, recheck
+`git diff --cached` and `git diff --cached --name-only`, then commit the reviewed
+index. Do not stage all files automatically:
 
 ```bash
-git add -A && git commit -m "[verified] <description>"
+git commit -m "[verified] <description>"
 ```
 
 The `[verified]` prefix indicates an independent reviewer approved this change.
