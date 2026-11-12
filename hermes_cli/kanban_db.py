@@ -3242,6 +3242,8 @@ def create_task(
     assignee = _canonical_assignee(assignee)
     if not title or not title.strip():
         raise ValueError("title is required")
+    from hermes_cli.kanban_duration import normalize_runtime_cap
+    max_runtime_seconds = normalize_runtime_cap(max_runtime_seconds)
     if initial_status not in VALID_INITIAL_STATUSES:
         raise ValueError(
             f"initial_status must be one of {sorted(VALID_INITIAL_STATUSES)}"

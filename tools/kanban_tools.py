@@ -1447,10 +1447,7 @@ def _handle_create(args: dict, **kw) -> str:
                 project_source_task_id=project_source_task_id,
                 triage=triage,
                 idempotency_key=idempotency_key,
-                max_runtime_seconds=(
-                    int(max_runtime_seconds)
-                    if max_runtime_seconds is not None else None
-                ),
+                max_runtime_seconds=max_runtime_seconds,
                 skills=skills,
                 model_override=model_override,
                 provider_override=provider_override,
@@ -2232,7 +2229,7 @@ KANBAN_CREATE_SCHEMA = {
             "max_runtime_seconds": {
                 "type": "integer",
                 "description": (
-                    "Per-task runtime cap. When exceeded, the "
+                    "Per-task runtime cap in positive whole seconds; omit for no cap. When exceeded, the "
                     "dispatcher SIGTERMs the worker and re-queues the "
                     "task with outcome='timed_out'."
                 ),
