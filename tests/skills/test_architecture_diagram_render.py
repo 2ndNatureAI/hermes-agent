@@ -72,3 +72,17 @@ def test_invalid_theme_is_rejected_before_output(tmp_path):
                             "--theme", 'url("https://example.invalid")')
     assert result.returncode != 0
     assert not output.exists()
+
+
+def test_columns_create_vertical_or_wider_grid(tmp_path):
+    graph = {"nodes": [{"id": str(i), "label": str(i)} for i in range(4)]}
+    result, output = render(tmp_path, graph, "--columns", "1")
+    assert result.returncode == 0 and 'viewBox="0 0 380 760"' in output.read_text(encoding="utf-8")
+    output.unlink()
+    result, output = render(tmp_path, graph, "--columns", "4")
+    assert result.returncode == 0 and 'viewBox="0 0 1280 250"' in output.read_text(encoding="utf-8")
+
+
+def test_invalid_columns_do_not_create_output(tmp_path):
+    result, output = render(tmp_path, {"nodes": [{"id": "a", "label": "A"}]}, "--columns", "0")
+    assert result.returncode != 0 and not output.exists()
