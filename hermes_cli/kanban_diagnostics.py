@@ -507,7 +507,8 @@ def _rule_prose_phantom_refs(task, events, runs, now, cfg) -> list[Diagnostic]:
             "but downstream consumers parsing the summary may be pointed "
             "at cards that never existed."
         ),
-        actions=_generic_recovery_actions(task, running=running),
+        actions=([] if _task_field(task, "status") in ("done", "archived")
+                 else _generic_recovery_actions(task, running=running)),
         first_seen_at=_event_ts(hits[0]),
         last_seen_at=_event_ts(hits[-1]),
         count=len(hits),
@@ -652,8 +653,8 @@ def _rule_repeated_failures(task, events, runs, now, cfg) -> list[Diagnostic]:
 
 def _rule_repeated_crashes(task, events, runs, now, cfg) -> list[Diagnostic]:
     """The worker spawns fine but keeps crashing mid-run. Check the last
-    N runs' outcomes; N consecutive ``crashed`` without a successful
-    ``completed`` means something about the task + profile combo is
+    runs' outcomes; N ``crashed`` since the last ``completed`` or
+    ``reclaimed`` means something about the task + profile combo is
     broken (OOM, missing dependency, tool it needs is down).
 
     Threshold: cfg["crash_threshold"] (default 2).
@@ -689,7 +690,7 @@ def _rule_repeated_crashes(task, events, runs, now, cfg) -> list[Diagnostic]:
 
     threshold = int(cfg.get("crash_threshold", 2))
     ordered = sorted(runs, key=lambda r: _task_field(r, "id", 0))
-    # Count trailing consecutive 'crashed' outcomes.
+    # Count crashes since the last completion or reclaim.
     consecutive = 0
     last_err = None
     for r in reversed(ordered):
@@ -728,13 +729,13 @@ def _rule_repeated_crashes(task, events, runs, now, cfg) -> list[Diagnostic]:
     if err_snippet:
         title = f"Agent crashed {consecutive}x: {err_snippet.splitlines()[0][:160]}"
         detail = (
-            f"The last {consecutive} runs ended with outcome=crashed. "
+            f"There were {consecutive} crashed runs since the last completed or reclaimed run, if any. "
             f"Full last error:\n\n{err_snippet}"
         )
     else:
         title = f"Agent crashed {consecutive}x (no error recorded)"
         detail = (
-            f"The last {consecutive} runs ended with outcome=crashed but "
+            f"There were {consecutive} crashed runs since the last completed or reclaimed run, if any, but "
             f"no error text was captured. Check the worker log for more."
         )
     return [Diagnostic(
