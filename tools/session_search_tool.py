@@ -51,14 +51,11 @@ _HIDDEN_SESSION_SOURCES = ("kanban", "subagent", "tool")
 # "session", summaries); under bare BM25 they dominate the top-N FTS rows and
 # starve out the user's own interactive sessions, producing "recall blindness"
 # where only cron sessions surface (#19434). Demoting — not excluding — keeps
-# cron content reachable when it's the only match, while interactive sessions
-# always win when both match.
+# cron content reachable when it's the only match. Title matches retain
+# their separate existing priority.
 _DEMOTED_SESSION_SOURCES = ("cron",)
 
-# How many FTS rows discover scans before dedup-by-lineage. The interactive
-# vs automation split below only helps if enough rows are in hand to find
-# interactive matches buried under a wall of cron hits, so this is well above
-# the handful of distinct sessions a typical query returns.
+# Maximum FTS rows scanned per source-priority lane before lineage dedup.
 _DISCOVER_SCAN_LIMIT = 300
 
 # Raw FTS rows are only a discovery-plan input. The final response hydrates
@@ -276,23 +273,6 @@ def _annotate_rebuild_status(db, payload: Dict[str, Any]) -> None:
             f"may be incomplete until it finishes."
         ),
     }
-
-
-def _order_for_recall(raw_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Stable-sort FTS rows so interactive sessions rank above automation.
-
-    Within each class (interactive vs demoted) the original BM25 ``rank``
-    order is preserved — Python's sort is stable, and rows arrive already
-    ranked by relevance. This only changes cross-class ordering: a cron hit
-    never displaces an interactive hit during lineage dedup, so the user's
-    own conversations surface first even when cron rows out-rank them under
-    bare BM25 (#19434). Demoted rows still appear when they're the only
-    matches.
-    """
-    return sorted(
-        raw_results,
-        key=lambda r: 1 if (r.get("source") or "") in _DEMOTED_SESSION_SOURCES else 0,
-    )
 
 
 def _shape_message(
@@ -773,45 +753,8 @@ def _discover(
     current_lineage_root = _resolve_lineage(db, current_session_id) if current_session_id else None
     title_result = _title_match_result(db, query, current_lineage_root)
 
-    try:
-        raw_results = db.search_messages(
-            query=query,
-            role_filter=role_list,
-            exclude_sources=list(_HIDDEN_SESSION_SOURCES),
-            limit=_DISCOVER_SCAN_LIMIT,  # widen so dedup-by-lineage can find
-            # distinct sessions AND so interactive matches buried under a wall
-            # of cron rows are still in hand for the demotion pass below.
-            offset=0,
-            sort=sort,
-            fields=_DISCOVER_SEARCH_FIELDS,
-        )
-    except Exception as e:
-        logging.error("FTS5 search failed: %s", e, exc_info=True)
-        return tool_error(f"Search failed: {e}", success=False)
-
-    # Demote automation (cron) rows below interactive ones before dedup, so a
-    # high-volume cron corpus can't starve the user's own sessions out of the
-    # top `limit` results (#19434). Stable — preserves BM25/recency order
-    # within each class.
-    raw_results = _order_for_recall(raw_results)
-
-    if not raw_results and not title_result:
-        _empty_payload = {
-            "success": True,
-            "mode": "discover",
-            "query": query,
-            "detail": detail,
-            "results": [],
-            "count": 0,
-            "message": (
-                "No matching sessions found. FTS5 ANDs all terms by default — "
-                "broaden with OR (`alpha OR beta`), exact-match with quoted "
-                "phrases, exclude with NOT, or prefix-match with `deploy*`."
-            ),
-        }
-        _annotate_rebuild_status(db, _empty_payload)
-        return json.dumps(_empty_payload, ensure_ascii=False)
-
+    # Apply source priority before the candidate cap so cron cannot hide
+    # interactive matches; retain cron fallback when fewer sessions survive.
     # Dedupe by lineage. Keep the raw owning session_id on the surviving
     # row — only that pairs validly with the FTS5 match id for the anchored
     # window. parent_session_id is exposed separately when different.
@@ -824,46 +767,85 @@ def _discover(
             seen_sessions[title_lineage] = {"_title_only": True}
         results.append(title_result)
 
-    for r in raw_results:
+    capped_lanes = []
+    search_warning = None
+    for cron_lane in (False, True):
         if len(seen_sessions) >= limit:
             break
-        raw_sid = r["session_id"]
-        resolved_sid, _ = _resolve_to_parent(db, raw_sid)
-        # Skip the current session lineage — UNLESS the hit's transcript has
-        # left live context. Three sub-cases:
-        #
-        # Legacy compression rotation: the FTS hit lives in a session that
-        # itself ended with end_reason='compression'. That session's content
-        # has been replaced by a summary in the continuation child, so it
-        # must stay discoverable.
-        #
-        # /new-reset (and idle/daily/CLI new_session): the predecessor was
-        # ended without carrying any transcript into the child. Same lineage
-        # root, but the prior conversation is NOT in the active context —
-        # hiding it made gateway recall go blind after every /new (#85756).
-        # A live delegation child has end_reason=None, so it stays excluded.
-        #
-        # In-place compaction: the FTS hit lives on the SAME session_id as the
-        # current session, but the matched message row is an archived
-        # (active=0, compacted=1) row. The live-context load filters active=1,
-        # so that content is no longer in context — let it through.
-        is_compacted_hit = _is_compacted_message(db, r.get("id"))
-        is_ended_session = _session_left_live_context(db, raw_sid)
-        if current_lineage_root and resolved_sid == current_lineage_root:
-            if not (is_ended_session or is_compacted_hit):
-                continue
-        if current_session_id and raw_sid == current_session_id:
-            # Same-session hit: only skip if the matched message is still live
-            # (active=1). Archived/compacted rows are pre-compaction content
-            # that's been summarised away — let them through.
-            if not is_compacted_hit:
-                continue
-        if resolved_sid not in seen_sessions:
-            row = dict(r)
-            row["_lineage_root"] = resolved_sid
-            seen_sessions[resolved_sid] = row
-        if len(seen_sessions) >= limit:
+        source_args = ({"source_filter": list(_DEMOTED_SESSION_SOURCES)} if cron_lane else
+                       {"exclude_sources": list(_HIDDEN_SESSION_SOURCES + _DEMOTED_SESSION_SOURCES)})
+        try:
+            raw_results = db.search_messages(
+                query=query, role_filter=role_list, **source_args,
+                limit=_DISCOVER_SCAN_LIMIT, offset=0, sort=sort, fields=_DISCOVER_SEARCH_FIELDS,
+            )
+        except Exception as e:
+            logging.error("FTS5 search failed: %s", e, exc_info=True)
+            if not cron_lane or not seen_sessions:
+                return tool_error(f"Search failed: {e}", success=False)
+            search_warning = "Cron search failed; results may be incomplete."
             break
+        if len(raw_results) >= _DISCOVER_SCAN_LIMIT:
+            capped_lanes.append("cron" if cron_lane else "other")
+        for r in raw_results:
+            if len(seen_sessions) >= limit:
+                break
+            raw_sid = r["session_id"]
+            resolved_sid, _ = _resolve_to_parent(db, raw_sid)
+            # Skip the current session lineage — UNLESS the hit's transcript has
+            # left live context. Three sub-cases:
+            #
+            # Legacy compression rotation: the FTS hit lives in a session that
+            # itself ended with end_reason='compression'. That session's content
+            # has been replaced by a summary in the continuation child, so it
+            # must stay discoverable.
+            #
+            # /new-reset (and idle/daily/CLI new_session): the predecessor was
+            # ended without carrying any transcript into the child. Same lineage
+            # root, but the prior conversation is NOT in the active context —
+            # hiding it made gateway recall go blind after every /new (#85756).
+            # A live delegation child has end_reason=None, so it stays excluded.
+            #
+            # In-place compaction: the FTS hit lives on the SAME session_id as the
+            # current session, but the matched message row is an archived
+            # (active=0, compacted=1) row. The live-context load filters active=1,
+            # so that content is no longer in context — let it through.
+            is_compacted_hit = _is_compacted_message(db, r.get("id"))
+            is_ended_session = _session_left_live_context(db, raw_sid)
+            if current_lineage_root and resolved_sid == current_lineage_root:
+                if not (is_ended_session or is_compacted_hit):
+                    continue
+            if current_session_id and raw_sid == current_session_id:
+                # Same-session hit: only skip if the matched message is still live
+                # (active=1). Archived/compacted rows are pre-compaction content
+                # that's been summarised away — let them through.
+                if not is_compacted_hit:
+                    continue
+            if resolved_sid not in seen_sessions:
+                row = dict(r)
+                row["_lineage_root"] = resolved_sid
+                seen_sessions[resolved_sid] = row
+            if len(seen_sessions) >= limit:
+                break
+
+    coverage = {}
+    if capped_lanes:
+        coverage["search_coverage"] = {
+            "candidate_cap_per_lane": _DISCOVER_SCAN_LIMIT,
+            "cap_reached": capped_lanes,
+            "note": "Candidate retrieval is bounded; other matches may be omitted.",
+        }
+    if search_warning:
+        coverage["search_warning"] = search_warning
+    if not seen_sessions:
+        empty_payload = {
+            "success": True, "mode": "discover", "query": query, "detail": detail,
+            "results": [], "count": 0, **coverage,
+            "message": "No eligible matching sessions found. FTS5 ANDs all terms by default; "
+                       "try OR, quoted phrases, NOT, or prefix matching with `deploy*`.",
+        }
+        _annotate_rebuild_status(db, empty_payload)
+        return json.dumps(empty_payload, ensure_ascii=False)
 
     for lineage_root, match_info in seen_sessions.items():
         if match_info.get("_title_only"):
@@ -938,6 +920,7 @@ def _discover(
         "results": results,
         "count": len(results),
         "sessions_searched": len(seen_sessions),
+        **coverage,
         "link_hint": (
             "When referring the user to a session, write its `link` value "
             "verbatim inline mid-sentence (it renders as a titled link) — never "
