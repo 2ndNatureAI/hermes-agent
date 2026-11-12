@@ -333,28 +333,82 @@ def render_sources(
 # ---------------------------------------------------------------------------
 
 
+_OWNED_START = "<!-- grounded-citations:start -->"
+_OWNED_END = "<!-- grounded-citations:end -->"
+_BOUNDARY_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+
+
+def _last_sources_header(lines: list[str]) -> int:
+    last = -1
+    fence = None
+    for i, line in enumerate(lines):
+        match = _BOUNDARY_FENCE_RE.match(line)
+        if match:
+            marker, suffix = match.groups()
+            if fence is None:
+                fence = (marker[0], len(marker))
+            elif marker[0] == fence[0] and len(marker) >= fence[1] and not suffix.strip():
+                fence = None
+            continue
+        if fence is None and _SOURCES_HEADER_RE.match(line):
+            last = i
+    return last
+
+
+def _replacement_parts(text: str, style: str) -> tuple[str, str]:
+    """Locate the explicitly managed region without consuming user text."""
+    lines = text.splitlines(keepends=True)
+    starts = [i for i, line in enumerate(lines) if line.strip() == _OWNED_START]
+    ends = [i for i, line in enumerate(lines) if line.strip() == _OWNED_END]
+    if text.count(_OWNED_START) != len(starts) or text.count(_OWNED_END) != len(ends):
+        raise SystemExit("error: malformed grounded-citations marker; draft unchanged")
+    if starts or ends:
+        if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
+            raise SystemExit("error: malformed grounded-citations marker pair; draft unchanged")
+        # An unmatched fence before the start marker makes its ownership ambiguous.
+        probe = "".join(lines[:starts[0]]) + "\n## Sources\n"
+        if _last_sources_header(probe.splitlines()) != len(probe.splitlines()) - 1:
+            raise SystemExit("error: grounded-citations marker is inside a code fence; draft unchanged")
+        before = "".join(lines[:starts[0]])
+        after = "".join(lines[ends[0] + 1:])
+        if _last_sources_header((before + after).splitlines()) >= 0:
+            raise SystemExit("error: ambiguous additional Sources block; draft unchanged")
+        return before, after
+    if _last_sources_header(lines) >= 0:
+        raise SystemExit("error: ambiguous unmarked Sources block; draft unchanged. "
+                         "Add grounded-citations start and end markers around only the block to replace.")
+    legacy = r"(?m)^\s*\[\^\d+\]:\s*https?://" if style == "footnotes" else r"(?mi)^\s*@misc\s*\{\s*source\d+\s*,"
+    if style in {"footnotes", "bibtex"} and re.search(legacy, text):
+        raise SystemExit("error: ambiguous unmarked citations; draft unchanged")
+    separator = "" if not text else ("\n" if text.endswith("\n") else "\n\n")
+    return text + separator, ""
+
+
 def _split_draft(text: str) -> tuple[str, dict[int, str]]:
     """Split a draft into (prose, sources_block_map).
 
-    The sources block is everything after the last ``Sources`` header; its
-    ``[n] url`` lines are parsed out so they aren't counted as prose citations.
+    Managed blocks are bounded by ownership markers; surrounding text remains
+    prose. For legacy drafts the last Sources header begins the block.
     Fenced code blocks are dropped from prose.
     """
-    lines = text.splitlines()
-    header_idx = -1
-    for i, line in enumerate(lines):
-        if _SOURCES_HEADER_RE.match(line):
-            header_idx = i
+    if _OWNED_START in text or _OWNED_END in text:
+        before, after = _replacement_parts(text, "")
+        managed = text[len(before):len(text) - len(after) if after else None]
+        lines = (before + after).splitlines()
+        source_lines = managed.splitlines()
+        header_idx = -1
+    else:
+        lines = text.splitlines()
+        header_idx = _last_sources_header(lines)
+        source_lines = lines[header_idx + 1:] if header_idx >= 0 else []
     listed: dict[int, str] = {}
-    if header_idx >= 0:
-        for line in lines[header_idx + 1:]:
+    if source_lines:
+        for line in source_lines:
             m = _SOURCE_LINE_RE.match(line)
             if m:
                 url_match = _URL_IN_TEXT_RE.search(line)
                 listed[int(m.group(1))] = url_match.group(0) if url_match else m.group(2)
-        body_lines = lines[:header_idx]
-    else:
-        body_lines = lines
+    body_lines = lines[:header_idx] if header_idx >= 0 else lines
     prose: list[str] = []
     in_fence = False
     for line in body_lines:
@@ -364,23 +418,6 @@ def _split_draft(text: str) -> tuple[str, dict[int, str]]:
         if not in_fence:
             prose.append(line)
     return "\n".join(prose), listed
-
-
-def _strip_sources_block(text: str) -> str:
-    """Return the draft with its trailing Sources block removed.
-
-    Everything from the last Sources header onward goes; a draft with no such
-    header is returned unchanged.  This is what makes ``render --replace-in``
-    idempotent instead of stacking duplicate blocks.
-    """
-    lines = text.splitlines()
-    header_idx = -1
-    for i, line in enumerate(lines):
-        if _SOURCES_HEADER_RE.match(line):
-            header_idx = i
-    if header_idx < 0:
-        return text
-    return "\n".join(lines[:header_idx])
 
 
 def _sentences(prose: str) -> list[str]:
@@ -634,7 +671,11 @@ def main(argv: list[str] | None = None) -> int:
         only = _parse_only(args.only)
         draft_for_ids = args.replace_in or args.cited_in
         if draft_for_ids:
-            draft = Path(draft_for_ids).read_text(encoding="utf-8")
+            with Path(draft_for_ids).open(encoding="utf-8", newline="") as f:
+                draft = f.read()
+            if args.replace_in:
+                before, after = _replacement_parts(draft, args.style)
+                draft = before + after
             prose, _ = _split_draft(draft)
             cited = {int(m) for m in _CITE_RE.findall(prose)}
             only = cited if only is None else (only & cited)
@@ -644,8 +685,11 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if args.replace_in:
             target = Path(args.replace_in)
-            body = _strip_sources_block(target.read_text(encoding="utf-8"))
-            target.write_text(body.rstrip("\n") + "\n\n" + block + "\n", encoding="utf-8")
+            if _OWNED_START in block or _OWNED_END in block:
+                raise SystemExit("error: rendered citation contains a reserved marker; draft unchanged")
+            managed = f"{_OWNED_START}\n{block}\n{_OWNED_END}\n"
+            with target.open("w", encoding="utf-8", newline="") as f:
+                f.write(before + managed + after)
             print(f"Sources block rewritten in {target}")
             return 0
         print(block)

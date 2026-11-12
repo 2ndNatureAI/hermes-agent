@@ -177,8 +177,13 @@ python "$S" render --style evidence --replace-in report.md
 deliverable shows claim → source → exact supporting text with nothing taken on
 faith. Use `--replace-in <draft>` to rewrite an existing Sources block in place
 (idempotent — safe to re-run after attaching more quotes); `--cited-in` prints
-to stdout instead. Both emit the heading `## Sources` (`--style plain` emits
-`Sources:`).
+to stdout instead. In-place rendering surrounds its output with
+`<!-- grounded-citations:start -->` and `<!-- grounded-citations:end -->`;
+only the text between those markers is managed and replaced. To update an old
+unmarked block, put the markers immediately around the exact block to replace.
+The command refuses ambiguous unmarked blocks and malformed markers rather than
+deleting surrounding text. Markdown and evidence styles emit `## Sources`
+(`--style plain` emits `Sources:`); footnotes and BibTeX use their own formats.
 
 **What `--min-coverage` counts.** Coverage is
 `sentences with declared provenance / prose sentences`. A prose sentence is a
