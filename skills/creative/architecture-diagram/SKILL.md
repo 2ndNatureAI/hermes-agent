@@ -63,7 +63,9 @@ python scripts/render_diagram.py graph.json request-flow.html --theme light
 ```
 
 Run the script relative to this skill directory. The default theme is `dark`;
-`light` is also available. The output contains inline SVG, a text description of
+`light` is also available. The optional `--columns` value from 1 to 6 controls
+the grid width; the default is 3. For example, `--columns 1` makes a vertical
+sequence. The output contains inline SVG, a text description of
 components and connections, and no network dependencies. The renderer refuses to
 overwrite an existing file and rejects duplicate IDs or edges to missing nodes.
 It lays out up to 60 nodes on a simple grid; for dense or visually complex graphs,

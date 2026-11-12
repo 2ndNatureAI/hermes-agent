@@ -19,7 +19,7 @@ def _text(value: object, field: str, *, required: bool = True) -> str:
     return value.strip()
 
 
-def render(graph: object, theme: str) -> str:
+def render(graph: object, theme: str, columns: int = 3) -> str:
     if not isinstance(graph, dict):
         raise ValueError("diagram must be a JSON object")
     title = _text(graph.get("title", "Architecture diagram"), "title")
@@ -33,7 +33,9 @@ def render(graph: object, theme: str) -> str:
     positions = {}
     rendered_nodes = []
     accessible_nodes = []
-    cols = min(3, len(nodes))
+    if not 1 <= columns <= 6:
+        raise ValueError("columns must be between 1 and 6")
+    cols = min(columns, len(nodes))
     width, height = cols * 300 + 80, math.ceil(len(nodes) / cols) * 170 + 80
     for index, node in enumerate(nodes):
         if not isinstance(node, dict):
@@ -109,10 +111,12 @@ def main() -> int:
     parser.add_argument("input", type=Path, help="JSON graph specification")
     parser.add_argument("output", type=Path, help="new HTML file to create")
     parser.add_argument("--theme", choices=("dark", "light"), default="dark")
+    parser.add_argument("--columns", type=int, choices=range(1, 7), default=3,
+                        help="grid columns, from 1 to 6 (default: 3)")
     args = parser.parse_args()
     try:
         data = json.loads(args.input.read_text(encoding="utf-8"))
-        document = render(data, args.theme)
+        document = render(data, args.theme, args.columns)
         with args.output.open("x", encoding="utf-8", newline="\n") as output:
             output.write(document)
     except (OSError, ValueError, RecursionError) as exc:
