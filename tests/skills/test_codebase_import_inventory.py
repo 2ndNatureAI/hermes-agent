@@ -1,8 +1,10 @@
 """The offline inventory reads source without executing it or following links."""
 
 import json
+import stat
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -81,3 +83,57 @@ def test_symbolic_link_outside_root_is_not_read(tmp_path):
     assert result.returncode == 0 and report["complete"] is False
     assert report["excluded_links"] == 1
     assert "outside_secret" not in result.stdout
+
+
+def test_zip_inventories_without_extracting_and_rejects_unsafe_members(tmp_path):
+    archive = tmp_path / "bank.zip"
+    link = zipfile.ZipInfo("repo/link.py")
+    link.create_system = 3
+    link.external_attr = (stat.S_IFLNK | 0o777) << 16
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("repo/a.py", "import os\nraise RuntimeError('not run')\n")
+        z.writestr("repo/client.js", "import x from 'example';\n")
+        z.writestr("repo/node_modules/pkg.js", "import 'excluded';\n")
+        z.writestr("../outside.py", "import unsafe\n")
+        z.writestr(link, "outside.py")
+    result, report = run(archive)
+    assert result.returncode == 0, result.stderr
+    assert not report["complete"] and report["excluded_members"] == 2
+    assert {row["path"] for row in report["files"]} == {"repo/a.py", "repo/client.js"}
+    assert not (tmp_path / "repo").exists()
+    assert "unsafe" not in result.stdout and "excluded" not in [i["module"] for row in report["files"] for i in row["imports"]]
+
+
+def test_zip_member_limits_and_unsupported_compression(tmp_path):
+    archive = tmp_path / "bank.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("large.py", "x" * 100)
+        z.writestr("unsupported.py", "import os", compress_type=zipfile.ZIP_BZIP2)
+    result, report = run(archive, "--max-file-bytes", "40")
+    assert result.returncode == 0 and not report["complete"]
+    assert [item["status"] for item in report["files"]] == ["too_large", "unsupported_or_encrypted"]
+    result, report = run(archive, "--max-files", "1")
+    assert result.returncode == 0 and report["file_limit_reached"] and not report["complete"]
+
+
+def test_zip_rejects_too_many_members_before_reading(tmp_path):
+    archive = tmp_path / "bank.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        for n in range(5001):
+            z.writestr(f"{n}.py", "")
+    result, report = run(archive)
+    assert result.returncode != 0 and report is None
+
+
+def test_zip_stops_at_total_uncompressed_source_limit(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    import zip_import_inventory
+
+    monkeypatch.setattr(zip_import_inventory, "MAX_TOTAL_SOURCE", 15)
+    archive = tmp_path / "bank.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("a.py", "import os\n")
+        z.writestr("b.py", "import os\n")
+    report = zip_import_inventory.inventory_zip(archive, 10, 100)
+    assert not report["complete"] and report["total_source_limit_reached"]
+    assert [row["path"] for row in report["files"]] == ["a.py"]
