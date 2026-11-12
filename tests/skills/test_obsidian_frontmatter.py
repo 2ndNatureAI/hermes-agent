@@ -81,6 +81,15 @@ class FrontmatterTests(unittest.TestCase):
     def test_unmatched_backticks_do_not_hide_later_line(self):
         self.check_fixture(b"` unmatched\n[[ActualBodyLink]] `\n", 2)
 
+    def test_comment_delimiter_inside_inline_code_keeps_later_link(self):
+        self.check_fixture(b"`%%` [[ActualBodyLink]]\n", 1)
+
+    def test_html_comment_delimiter_inside_inline_code_keeps_later_link(self):
+        self.check_fixture(b"`<!--` [[ActualBodyLink]]\n", 1)
+
+    def test_inline_code_and_comment_hide_only_their_contents(self):
+        self.check_fixture(b"`` ` %% [[Ignored]] `` %% ` [[AlsoIgnored]] %% [[ActualBodyLink]]\n", 1)
+
 
 if __name__ == "__main__":
     unittest.main()

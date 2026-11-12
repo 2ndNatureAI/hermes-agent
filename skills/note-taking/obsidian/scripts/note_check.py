@@ -22,6 +22,43 @@ def fail_walk(error):
     raise error
 
 
+def _mask_inline_and_comments(text, blank):
+    # Match same-width backtick runs on each line, then respect source order:
+    # comment markers inside a code span are literal, and vice versa.
+    runs = list(re.finditer(r"`+|\n", text))
+    starts = {}
+    next_run = {}
+    following = {}
+    for i in range(len(runs) - 1, -1, -1):
+        if runs[i].group() == "\n":
+            next_run.clear()
+            continue
+        starts[runs[i].start()] = i
+        width = len(runs[i].group())
+        following[i] = next_run.get(width)
+        next_run[width] = i
+    pos = 0
+    while pos < len(text):
+        if text.startswith("%%", pos):
+            close = text.find("%%", pos + 2)
+            end = len(text) if close < 0 else close + 2
+        elif text.startswith("<!--", pos):
+            close = text.find("-->", pos + 4)
+            end = len(text) if close < 0 else close + 3
+        elif pos in starts:
+            i = starts[pos]
+            close = following[i]
+            if close is None:
+                pos = runs[i].end()
+                continue
+            end = runs[close].end()
+        else:
+            pos += 1
+            continue
+        blank(pos, end)
+        pos = end
+
+
 def visible(text):
     # Preserve offsets/line numbers while masking code, comments and properties.
     chars = list(text)
@@ -53,29 +90,7 @@ def visible(text):
         elif fence:
             blank(offset, offset + len(line))
         offset += len(line)
-    interim = "".join(chars)
-    for m in re.finditer(r"%%[\s\S]*?(?:%%|\Z)|<!--[\s\S]*?(?:-->|\Z)", interim):
-        blank(m.start(), m.end())
-    interim = "".join(chars)
-    # Code-span delimiters match whole backtick runs of the same length.
-    runs = list(re.finditer(r"`+|\n", interim))
-    next_run = {}
-    following = {}
-    for i in range(len(runs) - 1, -1, -1):
-        if runs[i].group() == "\n":
-            next_run.clear()
-            continue
-        width = len(runs[i].group())
-        following[i] = next_run.get(width)
-        next_run[width] = i
-    i = 0
-    while i < len(runs):
-        close = following.get(i)
-        if close is None:
-            i += 1
-            continue
-        blank(runs[i].start(), runs[close].end())
-        i = close + 1
+    _mask_inline_and_comments("".join(chars), blank)
     return "".join(chars)
 
 
