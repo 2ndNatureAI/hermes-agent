@@ -549,18 +549,38 @@ def verify_draft(
 # ---------------------------------------------------------------------------
 
 
-def _parse_only(spec: str | None) -> set[int] | None:
+def _parse_only(spec: str | None, available_ids: Iterable[int]) -> set[int] | None:
     if not spec:
         return None
-    out: set[int] = set()
+    intervals: list[tuple[int, int]] = []
     for chunk in spec.replace(" ", "").split(","):
         if not chunk:
             continue
-        if "-" in chunk:
-            lo, _, hi = chunk.partition("-")
-            out.update(range(int(lo), int(hi) + 1))
+        try:
+            if "-" in chunk:
+                lo_text, _, hi_text = chunk.partition("-")
+                lo, hi = int(lo_text), int(hi_text)
+            else:
+                lo = hi = int(chunk)
+        except ValueError:
+            raise SystemExit("error: invalid --only selection; use ids or ranges such as 1,3-5") from None
+        if lo <= hi:
+            intervals.append((lo, hi))
+    merged: list[tuple[int, int]] = []
+    for lo, hi in sorted(intervals):
+        if merged and lo <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(hi, merged[-1][1]))
         else:
-            out.add(int(chunk))
+            merged.append((lo, hi))
+    out: set[int] = set()
+    index = 0
+    for source_id in sorted(set(available_ids)):
+        while index < len(merged) and merged[index][1] < source_id:
+            index += 1
+        if index == len(merged):
+            break
+        if merged[index][0] <= source_id:
+            out.add(source_id)
     return out
 
 
@@ -678,7 +698,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "render":
-        only = _parse_only(args.only)
+        only = _parse_only(args.only, (source["id"] for source in sources))
         draft_for_ids = args.replace_in or args.cited_in
         if draft_for_ids:
             with Path(draft_for_ids).open(encoding="utf-8", newline="") as f:
