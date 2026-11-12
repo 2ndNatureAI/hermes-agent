@@ -105,6 +105,9 @@ class Tier1Report:
     findings: List[Tier1Finding] = field(default_factory=list)
     incomplete_checks: List[str] = field(default_factory=list)
     error: str = ""                 # why the scan is unavailable (debug only)
+    completed_checks: Optional[int] = None
+    overall_failed: bool = False
+    completed_failed: bool = False
 
     @property
     def advisory_findings(self) -> List[Tier1Finding]:
@@ -152,14 +155,44 @@ def _parse_report(report: dict) -> Tier1Report:
     """
     findings: List[Tier1Finding] = []
     incomplete: List[str] = []
+    def add_incomplete(label: str) -> None:
+        if label not in incomplete:
+            incomplete.append(label)
+
+    def record_incomplete(value: object) -> bool:
+        if not isinstance(value, list):
+            add_incomplete("unrecognized incomplete scans")
+            return True
+        for name in value:
+            add_incomplete(name if isinstance(name, str) and name.strip() else "unrecognized incomplete scan")
+        return bool(value)
+
     any_complete_failed = False
-    for res in report.get("results", []) or []:
+    completed = 0
+    rows = report.get("results", [])
+    if not isinstance(rows, list) or not rows:
+        add_incomplete("no validator results")
+        rows = []
+    for res in rows:
+        if not isinstance(res, dict):
+            add_incomplete("unrecognized validator result")
+            continue
         validator = str(res.get("validator", "unknown"))
-        is_incomplete = str(res.get("status", "")).lower() == "incomplete"
+        row_partial = record_incomplete(res.get("incomplete_scans", []))
+        row_status = str(res.get("status", "")).lower()
+        row_passed = res.get("passed")
+        if type(row_passed) is not bool:
+            row_passed = {"passed": True, "failed": False}.get(row_status)
+        conflicting = ((row_status == "failed" and row_passed is True) or
+                       (row_status == "passed" and row_passed is False))
+        is_incomplete = (row_status not in ("", "passed", "failed") or row_partial
+                         or row_passed is None or conflicting)
         if is_incomplete:
-            incomplete.append(validator)
-        elif not res.get("passed", True):
-            any_complete_failed = True
+            add_incomplete(validator)
+        else:
+            completed += 1
+            if not row_passed:
+                any_complete_failed = True
         for f in res.get("findings", []) or []:
             if not isinstance(f, dict):
                 continue
@@ -172,11 +205,23 @@ def _parse_report(report: dict) -> Tier1Report:
                 line=int(f.get("line_number") or 0),
                 suggestion=str(f.get("suggestion", ""))[:200],
             ))
+    record_incomplete(report.get("incomplete_scans", []))
+    status = report.get("overall_status")
+    if status == "incomplete" and not incomplete:
+        add_incomplete("overall scan incomplete")
+    elif status is not None and status not in ("passed", "failed", "incomplete"):
+        add_incomplete("unrecognized overall status")
+    if "overall_passed" in report and type(report["overall_passed"]) is not bool:
+        add_incomplete("unrecognized overall verdict")
+    overall_failed = report.get("overall_passed") is False or status == "failed"
     return Tier1Report(
         available=True,
-        passed=not any_complete_failed and not findings,
+        passed=bool(completed) and not overall_failed and not any_complete_failed and not findings,
         findings=findings,
         incomplete_checks=incomplete,
+        completed_checks=completed,
+        overall_failed=overall_failed,
+        completed_failed=any_complete_failed,
     )
 
 
@@ -219,7 +264,13 @@ def format_tier1_report(report: Tier1Report, limit: int = 10) -> str:
         return ""
     lines: List[str] = []
     if not report.findings:
-        if report.incomplete_checks:
+        if report.overall_failed:
+            lines.append("SkillEvaluator Tier 1: overall result reported failure.")
+        elif report.completed_failed:
+            lines.append("SkillEvaluator Tier 1: a completed check reported failure.")
+        elif report.completed_checks == 0:
+            lines.append("SkillEvaluator Tier 1: no completed checks were reported.")
+        elif report.incomplete_checks:
             lines.append("SkillEvaluator Tier 1: no findings from completed checks.")
         else:
             lines.append("SkillEvaluator Tier 1: no findings.")
