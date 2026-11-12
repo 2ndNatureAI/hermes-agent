@@ -13,6 +13,29 @@ const THINKING_PREFIX_RE =
 
 const URL_RE = /\bhttps?:\/\/\S+/gi
 
+/** Keep the existing spoken link placeholder and trailing prose punctuation. */
+function stripUrlKeepSentenceEnd(match: string): string {
+  const token = match.trimStart()
+  let round = 0
+  let square = 0
+  for (const char of token) {
+    if (char === ')') round += 1
+    else if (char === '(') round -= 1
+    else if (char === ']') square += 1
+    else if (char === '[') square -= 1
+  }
+  let end = token.length
+  while (end > 0) {
+    const last = token[end - 1]
+    if ('.,;:!?'.includes(last)) end -= 1
+    else if (last === ')' && round > 0) { round -= 1; end -= 1 }
+    else if (last === ']' && square > 0) { square -= 1; end -= 1 }
+    else break
+  }
+  return ' link' + token.slice(end) + ' '
+}
+
+
 const MARKDOWN_TABLE_DELIMITER_CELL_RE = /^:?-{3,}:?$/
 
 interface MarkdownTableRow {
@@ -157,7 +180,7 @@ export function sanitizeTextForSpeech(text: string): string {
     .replace(THINKING_PREFIX_RE, ' ')
     .replace(MARKDOWN_LINK_RE, '$1')
     .replace(INLINE_CODE_RE, '$1')
-    .replace(URL_RE, ' link ')
+    .replace(URL_RE, stripUrlKeepSentenceEnd)
     .replace(EMOJI_RE, ' ')
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/[*_~>#]/g, '')
