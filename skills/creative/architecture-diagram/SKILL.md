@@ -39,9 +39,35 @@ Based on [Cocoon AI's architecture-diagram-generator](https://github.com/Cocoon-
 ## Workflow
 
 1. User describes their system architecture (components, connections, technologies)
-2. Generate the HTML file following the design system below
+2. For a straightforward component graph, use the structured renderer below; for a custom layout, generate HTML following the design system
 3. Save with `write_file` to a `.html` file (e.g. `~/architecture-diagram.html`)
 4. User opens in any browser — works offline, no dependencies
+
+### Structured renderer
+
+For a quick, reproducible diagram, write a JSON graph and run the bundled renderer:
+
+```json
+{
+  "title": "Request flow",
+  "nodes": [
+    {"id": "web", "label": "Browser"},
+    {"id": "api", "label": "API", "description": "Handles requests"}
+  ],
+  "edges": [{"from": "web", "to": "api", "label": "HTTPS"}]
+}
+```
+
+```bash
+python scripts/render_diagram.py graph.json request-flow.html --theme light
+```
+
+Run the script relative to this skill directory. The default theme is `dark`;
+`light` is also available. The output contains inline SVG, a text description of
+components and connections, and no network dependencies. The renderer refuses to
+overwrite an existing file and rejects duplicate IDs or edges to missing nodes.
+It lays out up to 60 nodes on a simple grid; for dense or visually complex graphs,
+use the custom-layout workflow and inspect the result in a browser.
 
 ### Output Location
 
@@ -77,7 +103,7 @@ Use specific `rgba` fills and hex strokes to categorize components:
 | **External** | `rgba(30, 41, 59, 0.5)` | `#94a3b8` (slate-400) |
 
 ### Typography & Background
-- **Font:** JetBrains Mono (Monospace), loaded from Google Fonts
+- **Font:** A local monospace font with a system fallback
 - **Sizes:** 12px (Names), 9px (Sublabels), 8px (Annotations), 7px (Tiny labels)
 - **Background:** Slate-950 (`#020617`) with a subtle 40px grid pattern
 
@@ -133,7 +159,7 @@ The generated HTML file follows a four-part layout:
 
 ## Output Requirements
 - **Single File:** One self-contained `.html` file
-- **No External Dependencies:** All CSS and SVG must be inline (except Google Fonts)
+- **No External Dependencies:** All CSS and SVG must be inline; use local or system fonts
 - **No JavaScript:** Use pure CSS for any animations (like pulsing dots)
 - **Compatibility:** Must render correctly in any modern web browser
 
