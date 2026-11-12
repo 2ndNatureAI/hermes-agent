@@ -142,6 +142,7 @@ class TodoStore:
         self._items = self._normalize_order(
             [self._validate(t) for t in self._dedupe_by_id(todos)]
         )[:MAX_TODO_ITEMS]
+        self._sanitize_parents(self._items)
         try:
             self._revision = max(0, int(revision or 0))
         except (TypeError, ValueError):
