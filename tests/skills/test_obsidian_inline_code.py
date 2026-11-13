@@ -139,3 +139,11 @@ def test_quoted_setext_headings_do_not_join_later_inline_code(tmp_path):
     assert [(f['line'], f['target']) for f in report['findings']] == [
         (1, 'HeadingOne'), (3, 'AfterOne'), (5, 'HeadingTwo'), (7, 'AfterTwo')
     ]
+
+
+def test_quoted_setext_underlines_of_each_supported_length_are_boundaries(tmp_path):
+    for underline in ('-', '--', '---', '=', '==', '==='):
+        raw = f'> ` [[Heading]]\n> {underline}\n> later ` [[After]]\n'.encode()
+        (tmp_path / 'A.md').write_bytes(raw)
+        report = checker.inspect(tmp_path, complete=True)
+        assert [(f['line'], f['target']) for f in report['findings']] == [(1, 'Heading'), (3, 'After')], underline

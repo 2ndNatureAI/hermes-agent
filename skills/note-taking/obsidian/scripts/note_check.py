@@ -91,7 +91,7 @@ def _mask_code_and_comments(text, blank):
         block = line_number in table_rows or '|' in line or bool(block_start.match(line.rstrip('\r\n')))
         quote = re.match(r'^ {0,3}>[ \t]?(.*)$', line.rstrip('\r\n'))
         plain_quote = bool(quote and not block_start.match(quote.group(1))
-                           and not re.fullmatch(r' {0,3}=+[ \t]*', quote.group(1))
+                           and not re.fullmatch(r' {0,3}(?:=+|-+)[ \t]*', quote.group(1))
                            and '|' not in line)
         if line_number in table_rows:
             _, pipes = _table_cells(line.rstrip('\r\n'))
