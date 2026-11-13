@@ -53,6 +53,10 @@ python "<skill_dir>/scripts/note_check.py" "<selected-copy>"
 
 The JSON report includes relative paths, link targets and an input digest; treat those names as private. The default partial scope reports absent targets as `unresolved_in_scope`, not broken. Use `--complete-vault` only for a verified entire vault copy, and review skipped paths and findings manually. This is a limited Markdown/Obsidian parser, not a safety boundary for a hostile or concurrently changing tree; multiline inline code and some aliases or Markdown formatting are not resolved. An exit status of zero means the check ran, not that every link is correct.
 
+## Check a Canvas file
+
+For a user-selected, trusted and stable `.canvas` file, run `python "<skill_dir>/scripts/canvas_check.py" "<canvas-file>"` after resolving `skill_dir` from `skill_view`. The read-only command checks JSON structure, node and edge IDs, and whether edge endpoints exist. It reads at most 5 MiB, does not open file or URL references, and reports at most 100 findings. A passing result is not full JSON Canvas schema validation; positions, node contents, external links, and referenced files are not checked. Exit status is 0 when these checks pass, 1 for findings, and 2 for an unreadable, oversized, invalid, or ambiguous JSON file (including duplicate object keys).
+
 ## Create a note
 
 Use `write_file` with the resolved absolute path and the full markdown content. Prefer this over shell heredocs or `echo` because it avoids shell quoting issues and returns structured results.
