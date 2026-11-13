@@ -84,18 +84,21 @@ def _mask_code_and_comments(text, blank):
         else:
             i += 1
     boundaries, table_pipes = set(), set()
-    offset, previous_block = 0, True
+    offset, previous_block, previous_plain_quote = 0, True, False
     for line_number, line in enumerate(lines):
         # Unknown pipe layouts may be table rows. Keep old line-local behavior
         # across them without treating their pipes as cell separators.
         block = line_number in table_rows or '|' in line or bool(block_start.match(line.rstrip('\r\n')))
+        quote = re.match(r'^ {0,3}>[ \t]?(.*)$', line.rstrip('\r\n'))
+        plain_quote = bool(quote and not block_start.match(quote.group(1)) and '|' not in line)
         if line_number in table_rows:
             _, pipes = _table_cells(line.rstrip('\r\n'))
             table_pipes.update(offset + pos for pos in pipes)
-        if offset and (previous_block or block):
+        if offset and (previous_block or block) and not (previous_plain_quote and plain_quote):
             boundaries.add(offset - 1)
         offset += len(line)
         previous_block = block
+        previous_plain_quote = plain_quote
 
     # Fences, comments and inline code are processed in source order. A
     # backslash can escape an opener, but never escapes a closer inside code.

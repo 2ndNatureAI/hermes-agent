@@ -103,3 +103,29 @@ def test_unrecognized_pipe_line_limits_multiline_but_not_same_line_code(tmp_path
     (tmp_path / 'A.md').write_bytes(raw)
     report = checker.inspect(tmp_path, complete=True)
     assert [(f['line'], f['target']) for f in report['findings']] == [(2, 'Visible'), (5, 'AlsoVisible')]
+
+
+def test_plain_blockquote_multiline_inline_code_hides_links_within_same_paragraph(tmp_path):
+    raw = (b'> `sample\n> [[Hidden]] end` [[Visible]]\n'
+           b'> ordinary ``sample\n> [[AlsoHidden]] end`` [[AlsoVisible]]\n')
+    (tmp_path / 'A.md').write_bytes(raw)
+    report = checker.inspect(tmp_path, complete=True)
+    assert [(f['line'], f['target']) for f in report['findings']] == [(2, 'Visible'), (4, 'AlsoVisible')]
+    clean = checker.visible(raw.decode())
+    assert len(clean) == len(raw)
+    assert [i for i, c in enumerate(clean) if c == '\n'] == [i for i, c in enumerate(raw.decode()) if c == '\n']
+
+
+def test_blockquote_boundaries_preserve_links_in_separate_blocks(tmp_path):
+    raw = (b'> unmatched `\n>\n> [[NewParagraph]] `\n'
+           b'> unmatched `\n> # [[Heading]] `\n'
+           b'> unmatched `\n> - [[ListItem]] `\n'
+           b'> unmatched `\n> > [[NestedQuote]] `\n'
+           b'> unmatched `\n[[OutsideQuote]] `\n'
+           b'> unmatched `\n> line | [[PipeLine]] `\n')
+    (tmp_path / 'A.md').write_bytes(raw)
+    report = checker.inspect(tmp_path, complete=True)
+    assert [(f['line'], f['target']) for f in report['findings']] == [
+        (3, 'NewParagraph'), (5, 'Heading'), (7, 'ListItem'),
+        (9, 'NestedQuote'), (11, 'OutsideQuote'), (13, 'PipeLine')
+    ]
