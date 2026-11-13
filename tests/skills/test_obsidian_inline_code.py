@@ -93,3 +93,13 @@ def test_aligned_line_without_header_pipe_remains_ordinary_paragraph(tmp_path):
     (tmp_path / 'A.md').write_bytes(raw)
     report = checker.inspect(tmp_path, complete=True)
     assert [(f['line'], f['target']) for f in report['findings']] == [(3, 'Visible')]
+
+
+def test_unrecognized_pipe_line_limits_multiline_but_not_same_line_code(tmp_path):
+    raw = (
+        b'Paragraph `starts\nunknown | [[Visible]]\nends`\n\n'
+        b'Ordinary `code | [[Hidden]]` [[AlsoVisible]]\n'
+    )
+    (tmp_path / 'A.md').write_bytes(raw)
+    report = checker.inspect(tmp_path, complete=True)
+    assert [(f['line'], f['target']) for f in report['findings']] == [(2, 'Visible'), (5, 'AlsoVisible')]

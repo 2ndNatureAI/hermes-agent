@@ -86,7 +86,9 @@ def _mask_code_and_comments(text, blank):
     boundaries, table_pipes = set(), set()
     offset, previous_block = 0, True
     for line_number, line in enumerate(lines):
-        block = line_number in table_rows or bool(block_start.match(line.rstrip('\r\n')))
+        # Unknown pipe layouts may be table rows. Keep old line-local behavior
+        # across them without treating their pipes as cell separators.
+        block = line_number in table_rows or '|' in line or bool(block_start.match(line.rstrip('\r\n')))
         if line_number in table_rows:
             _, pipes = _table_cells(line.rstrip('\r\n'))
             table_pipes.update(offset + pos for pos in pipes)
