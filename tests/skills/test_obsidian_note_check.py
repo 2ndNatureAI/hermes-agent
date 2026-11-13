@@ -234,3 +234,14 @@ def test_backslash_escaped_wikilinks_are_not_reported(tmp_path):
     report = inspect(tmp_path)
     assert report['link_count'] == 2
     assert {item['target'] for item in report['findings']} == {'Live', 'StillALink'}
+
+
+def test_frontmatter_fence_marker_does_not_hide_body_links(tmp_path):
+    (tmp_path / 'Example.md').write_text(
+        '---\ntemplate: |\n  ```\n---\n[[Missing]]\n', encoding='utf-8'
+    )
+    report = inspect(tmp_path, complete=True)
+    assert report['link_count'] == 1
+    assert [(item['line'], item['target'], item['status']) for item in report['findings']] == [
+        (5, 'Missing', 'missing')
+    ]

@@ -75,7 +75,9 @@ def visible(text):
             blank(0, opening.end() + end.end())
     fence = None
     offset = 0
-    for line in text.splitlines(keepends=True):
+    # Frontmatter is already masked: fence markers inside a YAML property are
+    # data, and must not start a code block that hides the body of the note.
+    for line in "".join(chars).splitlines(keepends=True):
         m = re.match(r"^\s*(`{3,}|~{3,})", line)
         if m:
             token = m.group(1)
