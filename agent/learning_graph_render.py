@@ -220,7 +220,7 @@ def _node_meta(node: dict[str, Any]) -> str:
 
 
 class _ChartBucket:
-    __slots__ = ("label", "ts", "skills", "memories", "nodes", "rec")
+    __slots__ = ("label", "ts", "skills", "memories", "nodes", "rec", "date_label")
 
     def __init__(self, label: str, ts: float):
         self.label = label
@@ -229,6 +229,7 @@ class _ChartBucket:
         self.memories = 0
         self.nodes: list[dict[str, Any]] = []
         self.rec = 1.0
+        self.date_label = None
 
     @property
     def total(self) -> int:
@@ -300,6 +301,18 @@ def _build_chart_buckets(nodes: list[dict[str, Any]], rec: dict[str, Any], max_r
                 b.memories += 1
             else:
                 b.skills += 1
+        for bucket in chosen:
+            times = [_to_ts(node.get("timestamp")) for node in bucket.nodes]
+            times = [ts for ts in times if ts is not None]
+            if not times:
+                bucket.label, bucket.date_label = "—", "unknown"
+                continue
+            first, last = min(times), max(times)
+            start, end = format_date(first), format_date(last)
+            first_year = datetime.fromtimestamp(first, tz=timezone.utc).year
+            last_year = datetime.fromtimestamp(last, tz=timezone.utc).year
+            bucket.label = str(first_year) if first_year == last_year else f"{first_year}–{last_year}"
+            bucket.date_label = start if start == end else f"{start} – {end}"
 
     if undated:
         bucket = _ChartBucket("undated", 0)
@@ -363,7 +376,7 @@ def _bucket_rows(buckets: list[_ChartBucket], payload: dict[str, Any]) -> list[d
             {
                 "index": idx,
                 "label": bucket.label,
-                "date": "unknown" if bucket.label == "undated" else format_date(bucket.ts),
+                "date": "unknown" if bucket.label == "undated" else bucket.date_label or format_date(bucket.ts),
                 "skills": bucket.skills,
                 "memories": bucket.memories,
                 "total": bucket.total,
