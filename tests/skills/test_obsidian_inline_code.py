@@ -168,3 +168,10 @@ def test_quoted_table_escaped_pipe_and_following_quote_paragraph(tmp_path):
     (tmp_path / 'A.md').write_bytes(raw)
     report = checker.inspect(tmp_path, complete=True)
     assert [(f['line'], f['target']) for f in report['findings']] == [(3, 'Visible'), (6, 'After')]
+
+
+def test_quoted_table_rows_without_pipes_do_not_join_code_spans(tmp_path):
+    raw = b'> A | B\n> --- | ---\n> unmatched `\n> [[Visible]] `\n'
+    (tmp_path / 'A.md').write_bytes(raw)
+    report = checker.inspect(tmp_path, complete=True)
+    assert [(f['line'], f['target']) for f in report['findings']] == [(4, 'Visible')]
