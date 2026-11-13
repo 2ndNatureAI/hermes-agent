@@ -70,7 +70,7 @@ def recency_ink(rec: float) -> float:
 
 
 def format_date(ts: Optional[float]) -> str:
-    if not ts:
+    if ts is None:
         return "unknown"
     try:
         dt = datetime.fromtimestamp(float(ts), tz=timezone.utc)
@@ -107,15 +107,6 @@ def compute_recency(nodes: list[dict[str, Any]]) -> dict[str, Any]:
         rec[nid] = LEAD_IN + (1 - LEAD_IN) * _clamp(ratio, 0.0, 1.0)
 
     return {"rec": rec, "timed": timed, "minTs": min_ts, "maxTs": max_ts}
-
-
-def _date_at(rec: dict[str, Any], reveal: float) -> Optional[float]:
-    if not rec.get("timed"):
-        return None
-    lo, hi = rec.get("minTs"), rec.get("maxTs")
-    if lo is None or hi is None:
-        return None
-    return round(lo + _clamp(reveal, 0, 1) * (hi - lo))
 
 
 # ── Color: ported from color.ts so memory ink + age fade match the desktop ──
@@ -266,20 +257,6 @@ def _build_chart_buckets(nodes: list[dict[str, Any]], rec: dict[str, Any], max_r
     """Timeline rows: finest date granularity that fits, oldest → newest."""
     if not nodes:
         return []
-    if not rec["timed"]:
-        ordered = sorted(nodes, key=lambda n: rec["rec"].get(str(n.get("id", "")), 0.0))
-        n_bins = min(max_rows, max(1, len(ordered)))
-        buckets = [_ChartBucket(f"#{i + 1}", float(i)) for i in range(n_bins)]
-        for node in ordered:
-            idx = int(_clamp(math.floor(rec["rec"].get(str(node.get("id", "")), 0.0) * n_bins), 0, n_bins - 1))
-            b = buckets[idx]
-            b.nodes.append(node)
-            if node.get("kind") == "memory":
-                b.memories += 1
-            else:
-                b.skills += 1
-        return buckets
-
     dated = [node for node in nodes if _to_ts(node.get("timestamp")) is not None]
     undated = [node for node in nodes if _to_ts(node.get("timestamp")) is None]
     chosen: Optional[list[_ChartBucket]] = None
@@ -312,7 +289,7 @@ def _build_chart_buckets(nodes: list[dict[str, Any]], rec: dict[str, Any], max_r
         n_bins = max(1, max_rows)
         chosen = []
         for i in range(n_bins):
-            ts = min_ts + (i / max(1, n_bins - 1)) * (max_ts - min_ts) if min_ts and max_ts else float(i)
+            ts = min_ts + (i / max(1, n_bins - 1)) * (max_ts - min_ts) if min_ts is not None and max_ts is not None else float(i)
             chosen.append(_ChartBucket(format_date(ts), ts))
         for node in dated:
             r = rec["rec"].get(str(node.get("id", "")), 0.0)
@@ -329,7 +306,7 @@ def _build_chart_buckets(nodes: list[dict[str, Any]], rec: dict[str, Any], max_r
         bucket.nodes = undated
         bucket.memories = sum(node.get("kind") == "memory" for node in undated)
         bucket.skills = len(undated) - bucket.memories
-        chosen.append(bucket)
+        chosen.insert(0, bucket)
 
     min_ts, max_ts = rec.get("minTs"), rec.get("maxTs")
     span = (max_ts - min_ts) if min_ts is not None and max_ts is not None and max_ts > min_ts else 0
@@ -382,7 +359,7 @@ def _bucket_rows(buckets: list[_ChartBucket], payload: dict[str, Any]) -> list[d
             {
                 "index": idx,
                 "label": bucket.label,
-                "date": format_date(bucket.ts),
+                "date": "unknown" if bucket.label == "undated" else format_date(bucket.ts),
                 "skills": bucket.skills,
                 "memories": bucket.memories,
                 "total": bucket.total,
@@ -443,11 +420,13 @@ def _trajectory_row(buckets: list[_ChartBucket], width: int, reveal: float) -> R
     """Cumulative learning curve as a compact star-path sparkline."""
     if not buckets:
         return []
-    total = sum(b.total for b in buckets) or 1
     visible = int(_clamp(math.ceil(reveal * len(buckets)), 0, len(buckets)))
+    total = sum(b.total for b in buckets if b.label != "undated") or 1
     acc = 0
     points: list[int] = []
     for b in buckets[:visible]:
+        if b.label == "undated":
+            continue
         acc += b.total
         points.append(round((acc / total) * (width - 1)))
     cells = [" "] * width
@@ -482,6 +461,8 @@ def render_graph(payload: dict[str, Any], *, cols: int = 80, rows: int = 16, rev
     buckets = _build_chart_buckets(nodes, rec, max_rows=max(4, rows - 3))
     n_buckets = len(buckets)
     visible_bucket_count = int(_clamp(math.ceil(reveal * n_buckets), 0, n_buckets))
+    visible_dated = [i for i in range(visible_bucket_count) if buckets[i].label != "undated" and buckets[i].total]
+    latest_dated = visible_dated[-1] if visible_dated else None
     max_total = max((b.total for b in buckets), default=1) or 1
     label_w = min(9, max(len(b.label) for b in buckets))
     bar_w = max(14, cols - label_w - 16)
@@ -547,7 +528,7 @@ def render_graph(payload: dict[str, Any], *, cols: int = 80, rows: int = 16, rev
         if bucket.memories:
             row.append(["+", STYLE_DIM, 0.6])
             row.append([str(bucket.memories), STYLE_MEMORY, max(0.72, ink)])
-        if i == visible_bucket_count - 1 and bucket.label != "undated":
+        if i == latest_dated:
             row.append(["  ◀ now", STYLE_LABEL, 0.9])
         elif bucket.total == max_total and max_total > 1:
             row.append(["  ☄ peak", STYLE_LABEL, 0.75])
@@ -558,8 +539,9 @@ def render_graph(payload: dict[str, Any], *, cols: int = 80, rows: int = 16, rev
 
     return {
         "grid": grid,
-        "date": "unknown" if visible_bucket_count and buckets[visible_bucket_count - 1].label == "undated"
-        else format_date(_date_at(rec, reveal)),
+        "date": format_date(max((_to_ts(node.get("timestamp")) for i in visible_dated
+                                 for node in buckets[i].nodes if _to_ts(node.get("timestamp")) is not None),
+                                default=None)),
         "reveal": reveal,
         "visible": visible,
         "labels": labels,
@@ -581,8 +563,8 @@ def build_legend(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 def axis_labels(payload: dict[str, Any]) -> dict[str, str]:
     rec = compute_recency(list(payload.get("nodes", [])))
-    if not rec["timed"]:
-        return {"start": "oldest", "end": "now"}
+    if rec.get("minTs") is None:
+        return {"start": "unknown", "end": "unknown"}
     return {"start": format_date(rec.get("minTs")), "end": format_date(rec.get("maxTs"))}
 
 
@@ -639,6 +621,7 @@ def _merge_runs(cells: Iterable[Run]) -> Row:
 def render_frames(payload: dict[str, Any], *, cols: int = 80, rows: int = 16, frames: int = 48) -> dict[str, Any]:
     """Pre-render a full play-through (reveal 0→1) plus static legend/summary."""
     frames = max(2, min(frames, 240))
+    rows = max(14, rows)
     nodes = list(payload.get("nodes", []))
     rec = compute_recency(nodes)
     # Mirror render_graph's bucketing so the interactive row list lines up with
