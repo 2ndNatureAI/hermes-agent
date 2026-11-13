@@ -22,6 +22,32 @@ def fail_walk(error):
     raise error
 
 
+def _table_cells(line):
+    # GFM tables use unescaped pipes as cell boundaries. Pipes escaped in a
+    # wikilink alias or a code span belong to the cell, not the table layout.
+    pipes = []
+    for match in re.finditer(r'\|', line):
+        pos = match.start()
+        before = pos - 1
+        while before >= 0 and line[before] == '\\':
+            before -= 1
+        if (pos - before - 1) % 2 == 0:
+            pipes.append(pos)
+    if not pipes:
+        return [], []
+    cells = []
+    start = 0
+    for end in pipes:
+        cells.append(line[start:end].strip())
+        start = end + 1
+    cells.append(line[start:].strip())
+    if cells[0] == '':
+        cells.pop(0)
+    if cells and cells[-1] == '':
+        cells.pop()
+    return cells, pipes
+
+
 def _mask_code_and_comments(text, blank):
     # Inline spans can cross ordinary paragraph lines, but not block boundaries.
     # This deliberately recognizes a conservative subset of Markdown blocks.
@@ -30,10 +56,36 @@ def _mask_code_and_comments(text, blank):
         r'\d{1,9}[.)][ \t]+|`{3,}|~{3,}|%%|<!--|<[/!?A-Za-z]|'
         r'(?:[-*_][ \t]*){3,}$)| {4,}|\t)'
     )
-    boundaries = set()
+    lines = text.splitlines(keepends=True)
+    table_rows = set()
+    divider_line = re.compile(r'^[ \t]*\|?[ \t]*:?-+:?(?:[ \t]*\|[ \t]*:?-+:?)*[ \t]*\|?[ \t]*$')
+    i = 1
+    while i < len(lines):
+        line = lines[i].rstrip('\r\n')
+        if not divider_line.fullmatch(line):
+            i += 1
+            continue
+        divider, _ = _table_cells(line)
+        if not divider:
+            i += 1
+            continue
+        header, _ = _table_cells(lines[i - 1].rstrip('\r\n'))
+        if (header and len(header) == len(divider)
+                and all(re.fullmatch(r':?-+:?', cell) for cell in divider)):
+            table_rows.update((i - 1, i))
+            i += 1
+            while i < len(lines) and not block_start.match(lines[i].rstrip('\r\n')):
+                table_rows.add(i)
+                i += 1
+        else:
+            i += 1
+    boundaries, table_pipes = set(), set()
     offset, previous_block = 0, True
-    for line in text.splitlines(keepends=True):
-        block = bool(block_start.match(line.rstrip('\r\n')))
+    for line_number, line in enumerate(lines):
+        block = line_number in table_rows or bool(block_start.match(line.rstrip('\r\n')))
+        if line_number in table_rows:
+            _, pipes = _table_cells(line.rstrip('\r\n'))
+            table_pipes.update(offset + pos for pos in pipes)
         if offset and (previous_block or block):
             boundaries.add(offset - 1)
         offset += len(line)
@@ -44,7 +96,12 @@ def _mask_code_and_comments(text, blank):
     runs = list(re.finditer(r"`+|\n", text))
     starts = {}
     next_run = {}
+    table_pipes = sorted(table_pipes)
+    pipe_index = len(table_pipes) - 1
     for i in range(len(runs) - 1, -1, -1):
+        while pipe_index >= 0 and table_pipes[pipe_index] > runs[i].start():
+            next_run.clear()
+            pipe_index -= 1
         if runs[i].group() == "\n":
             if runs[i].start() in boundaries:
                 next_run.clear()

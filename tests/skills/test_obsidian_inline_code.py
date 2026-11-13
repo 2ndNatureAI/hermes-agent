@@ -55,3 +55,26 @@ def test_escaped_opener_does_not_pair_with_a_later_unmatched_backtick(tmp_path):
     (tmp_path / 'A.md').write_bytes(b'Escaped \\` [[Visible]] unmatched `\n')
     report = checker.inspect(tmp_path, complete=True)
     assert [(f['line'], f['target']) for f in report['findings']] == [(1, 'Visible')]
+
+
+def test_table_rows_and_cells_are_inline_code_boundaries(tmp_path):
+    raw = (
+        b'| ` [[Header]] | x |\n| --- | --- |\n| [[LaterRow]] ` | x |\n'
+        b'| ` [[CellOne]] | [[CellTwo]] ` |\n'
+        b'| `inside [[Hidden]]` | [[Visible]] |\n'
+        b'| `code \\| [[HiddenEscapedPipe]]` | [[VisibleAgain]] |\n'
+        b'\nOrdinary `code | [[HiddenOrdinaryPipe]]` [[Outside]]\n'
+    )
+    (tmp_path / 'A.md').write_bytes(raw)
+    report = checker.inspect(tmp_path, complete=True)
+    assert [(f['line'], f['target']) for f in report['findings']] == [
+        (1, 'Header'), (3, 'LaterRow'), (4, 'CellOne'), (4, 'CellTwo'),
+        (5, 'Visible'), (6, 'VisibleAgain'), (8, 'Outside')
+    ]
+
+
+def test_table_with_no_outer_pipes_keeps_cells_separate(tmp_path):
+    raw = b'` [[Header]] | column\n--- | ---\n[[First]] ` | column\n'
+    (tmp_path / 'A.md').write_bytes(raw)
+    report = checker.inspect(tmp_path, complete=True)
+    assert [(f['line'], f['target']) for f in report['findings']] == [(1, 'Header'), (3, 'First')]
