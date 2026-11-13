@@ -262,7 +262,11 @@ def _collect(root: Path):
                 skipped.append({"path": rel, "reason": "oversized"})
                 continue
             try:
-                data = p.read_bytes()
+                with p.open("rb") as stream:
+                    data = stream.read(MAX_BYTES + 1)
+                if len(data) > MAX_BYTES:
+                    skipped.append({"path": rel, "reason": "oversized"})
+                    continue
                 text = data.decode("utf-8-sig")
             except (OSError, UnicodeError):
                 skipped.append({"path": rel, "reason": "unreadable_utf8"})
