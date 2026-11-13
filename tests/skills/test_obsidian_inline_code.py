@@ -49,3 +49,9 @@ def test_escaped_tick_runs_and_crlf_keep_original_line_numbers(tmp_path):
     assert [(f['line'], f['target']) for f in report['findings']] == [
         (1, 'Visible'), (3, 'AlsoVisible'), (5, 'LastVisible')
     ]
+
+
+def test_escaped_opener_does_not_pair_with_a_later_unmatched_backtick(tmp_path):
+    (tmp_path / 'A.md').write_bytes(b'Escaped \\` [[Visible]] unmatched `\n')
+    report = checker.inspect(tmp_path, complete=True)
+    assert [(f['line'], f['target']) for f in report['findings']] == [(1, 'Visible')]
