@@ -23,19 +23,43 @@ def fail_walk(error):
 
 
 def _mask_code_and_comments(text, blank):
-    # Match same-width backtick runs on each line. Fences, comments and inline
-    # code are handled in source order so their markers cannot escape each other.
+    # Inline spans can cross ordinary paragraph lines, but not block boundaries.
+    # This deliberately recognizes a conservative subset of Markdown blocks.
+    block_start = re.compile(
+        r'^(?:[ \t]*(?:$|#{1,6}(?:[ \t]|$)|>|[-+*][ \t]+|'
+        r'\d{1,9}[.)][ \t]+|`{3,}|~{3,}|%%|<!--|<[/!?A-Za-z]|'
+        r'(?:[-*_][ \t]*){3,}$)| {4,}|\t)'
+    )
+    boundaries = set()
+    offset, previous_block = 0, True
+    for line in text.splitlines(keepends=True):
+        block = bool(block_start.match(line.rstrip('\r\n')))
+        if offset and (previous_block or block):
+            boundaries.add(offset - 1)
+        offset += len(line)
+        previous_block = block
+
+    # Fences, comments and inline code are processed in source order. A
+    # backslash can escape an opener, but never escapes a closer inside code.
     runs = list(re.finditer(r"`+|\n", text))
     starts = {}
     next_run = {}
-    following = {}
     for i in range(len(runs) - 1, -1, -1):
         if runs[i].group() == "\n":
-            next_run.clear()
+            if runs[i].start() in boundaries:
+                next_run.clear()
             continue
-        starts[runs[i].start()] = i
+        start = runs[i].start()
         width = len(runs[i].group())
-        following[i] = next_run.get(width)
+        before = start - 1
+        while before >= 0 and text[before] == '\\':
+            before -= 1
+        escaped = (start - before - 1) % 2 == 1
+        if not escaped:
+            starts[start] = (i, next_run.get(width))
+        elif width > 1:
+            # The escaped first tick is literal; the rest can open a span.
+            starts[start + 1] = (i, next_run.get(width - 1))
         next_run[width] = i
     pos = 0
     fence = None
@@ -63,8 +87,7 @@ def _mask_code_and_comments(text, blank):
             close = text.find("-->", pos + 4)
             end = len(text) if close < 0 else close + 3
         elif pos in starts:
-            i = starts[pos]
-            close = following[i]
+            i, close = starts[pos]
             if close is None:
                 pos = runs[i].end()
                 continue

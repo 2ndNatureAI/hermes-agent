@@ -78,8 +78,8 @@ class FrontmatterTests(unittest.TestCase):
     def test_unmatched_opener_does_not_hide_later_code_span(self):
         self.check_fixture(b"` unmatched; `` [[NotALink]] ``\n[[ActualBodyLink]]\n", 2)
 
-    def test_unmatched_backticks_do_not_hide_later_line(self):
-        self.check_fixture(b"` unmatched\n[[ActualBodyLink]] `\n", 2)
+    def test_unmatched_backticks_do_not_hide_later_paragraph(self):
+        self.check_fixture(b"` unmatched\n\n[[ActualBodyLink]] `\n", 3)
 
     def test_comment_delimiter_inside_inline_code_keeps_later_link(self):
         self.check_fixture(b"`%%` [[ActualBodyLink]]\n", 1)
