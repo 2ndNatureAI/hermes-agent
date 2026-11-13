@@ -22,9 +22,9 @@ def fail_walk(error):
     raise error
 
 
-def _mask_inline_and_comments(text, blank):
-    # Match same-width backtick runs on each line, then respect source order:
-    # comment markers inside a code span are literal, and vice versa.
+def _mask_code_and_comments(text, blank):
+    # Match same-width backtick runs on each line. Fences, comments and inline
+    # code are handled in source order so their markers cannot escape each other.
     runs = list(re.finditer(r"`+|\n", text))
     starts = {}
     next_run = {}
@@ -38,7 +38,24 @@ def _mask_inline_and_comments(text, blank):
         following[i] = next_run.get(width)
         next_run[width] = i
     pos = 0
+    fence = None
     while pos < len(text):
+        if pos == 0 or text[pos - 1] == "\n":
+            newline = text.find("\n", pos)
+            line_end = len(text) if newline < 0 else newline + 1
+            line = text[pos:line_end]
+            m = re.match(r"^[ \t]*(`{3,}|~{3,})", line)
+            if fence is not None:
+                if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1] and not line[m.end():].strip():
+                    fence = None
+                blank(pos, line_end)
+                pos = line_end
+                continue
+            if m:
+                fence = (m.group(1)[0], len(m.group(1)))
+                blank(pos, line_end)
+                pos = line_end
+                continue
         if text.startswith("%%", pos):
             close = text.find("%%", pos + 2)
             end = len(text) if close < 0 else close + 2
@@ -73,28 +90,9 @@ def visible(text):
         end = re.search(r"^---[ \t]*\r?$", text[opening.end() :], re.M)
         if end:
             blank(0, opening.end() + end.end())
-    fence = None
-    offset = 0
-    for line in text.splitlines(keepends=True):
-        m = re.match(r"^\s*(`{3,}|~{3,})", line)
-        if m:
-            token = m.group(1)
-            if fence is None:
-                fence = (token[0], len(token))
-                blank(offset, offset + len(line))
-            elif (
-                token[0] == fence[0]
-                and len(token) >= fence[1]
-                and not line[m.end():].strip()
-            ):
-                blank(offset, offset + len(line))
-                fence = None
-            elif fence:
-                blank(offset, offset + len(line))
-        elif fence:
-            blank(offset, offset + len(line))
-        offset += len(line)
-    _mask_inline_and_comments("".join(chars), blank)
+    # Frontmatter is masked before tokenization; fence markers in properties
+    # are data and cannot hide the body.
+    _mask_code_and_comments("".join(chars), blank)
     return "".join(chars)
 
 
