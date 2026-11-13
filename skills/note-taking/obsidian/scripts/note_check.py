@@ -57,11 +57,16 @@ def _mask_code_and_comments(text, blank):
         r'(?:[-*_][ \t]*){3,}$)| {4,}|\t)'
     )
     lines = text.splitlines(keepends=True)
-    table_rows = set()
+    table_rows = {}
+    def table_line(line):
+        line = line.rstrip('\r\n')
+        quote = re.match(r'^ {0,3}>[ \t]?', line)
+        prefix = quote.end() if quote else 0
+        return line[prefix:], prefix
     divider_line = re.compile(r'^[ \t]*\|?[ \t]*:?-+:?(?:[ \t]*\|[ \t]*:?-+:?)*[ \t]*\|?[ \t]*$')
     i = 1
     while i < len(lines):
-        line = lines[i].rstrip('\r\n')
+        line, prefix = table_line(lines[i])
         if not divider_line.fullmatch(line):
             i += 1
             continue
@@ -73,13 +78,17 @@ def _mask_code_and_comments(text, blank):
         if not divider:
             i += 1
             continue
-        header, _ = _table_cells(lines[i - 1].rstrip('\r\n'))
-        if (header and len(header) == len(divider)
+        header_line, header_prefix = table_line(lines[i - 1])
+        header, _ = _table_cells(header_line)
+        if (bool(prefix) == bool(header_prefix) and header and len(header) == len(divider)
                 and all(re.fullmatch(r':?-+:?', cell) for cell in divider)):
-            table_rows.update((i - 1, i))
+            table_rows.update({i - 1: header_prefix, i: prefix})
             i += 1
-            while i < len(lines) and not block_start.match(lines[i].rstrip('\r\n')):
-                table_rows.add(i)
+            while i < len(lines):
+                body, body_prefix = table_line(lines[i])
+                if bool(body_prefix) != bool(prefix) or block_start.match(body):
+                    break
+                table_rows[i] = body_prefix
                 i += 1
         else:
             i += 1
@@ -94,8 +103,9 @@ def _mask_code_and_comments(text, blank):
                            and not re.fullmatch(r' {0,3}(?:=+|-+)[ \t]*', quote.group(1))
                            and '|' not in line)
         if line_number in table_rows:
-            _, pipes = _table_cells(line.rstrip('\r\n'))
-            table_pipes.update(offset + pos for pos in pipes)
+            prefix = table_rows[line_number]
+            _, pipes = _table_cells(line[prefix:].rstrip('\r\n'))
+            table_pipes.update(offset + prefix + pos for pos in pipes)
         if offset and (previous_block or block) and not (previous_plain_quote and plain_quote):
             boundaries.add(offset - 1)
         offset += len(line)

@@ -147,3 +147,24 @@ def test_quoted_setext_underlines_of_each_supported_length_are_boundaries(tmp_pa
         (tmp_path / 'A.md').write_bytes(raw)
         report = checker.inspect(tmp_path, complete=True)
         assert [(f['line'], f['target']) for f in report['findings']] == [(1, 'Heading'), (3, 'After')], underline
+
+
+def test_quoted_table_cells_do_not_join_inline_code_across_pipes(tmp_path):
+    raw = (b'> | ` [[HeaderOne]] | [[HeaderTwo]] ` |\n'
+           b'> | --- | --- |\n'
+           b'> | ` [[BodyOne]] | [[BodyTwo]] ` |\n'
+           b'> | `inside [[Hidden]]` | [[Visible]] |\n')
+    (tmp_path / 'A.md').write_bytes(raw)
+    report = checker.inspect(tmp_path, complete=True)
+    assert [(f['line'], f['target']) for f in report['findings']] == [
+        (1, 'HeaderOne'), (1, 'HeaderTwo'), (3, 'BodyOne'), (3, 'BodyTwo'), (4, 'Visible')
+    ]
+
+
+def test_quoted_table_escaped_pipe_and_following_quote_paragraph(tmp_path):
+    raw = (b'> Name | Notes\n> --- | ---\n'
+           b'> `literal \\| [[Hidden]]` | [[Visible]]\n'
+           b'>\n> `ordinary\n> [[AlsoHidden]] end` [[After]]\n')
+    (tmp_path / 'A.md').write_bytes(raw)
+    report = checker.inspect(tmp_path, complete=True)
+    assert [(f['line'], f['target']) for f in report['findings']] == [(3, 'Visible'), (6, 'After')]
