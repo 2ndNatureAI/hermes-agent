@@ -51,6 +51,18 @@ class Tests(unittest.TestCase):
         self.put("B.md", "# B")
         self.assertEqual(self.states(), [])
 
+    def test_dotted_note_names_and_file_embeds(self):
+        self.put("A.md", "[[Project v1.2]] ![[manual.pdf]] [[Project v1.2#Milestone]]")
+        self.put("Project v1.2.md", "# Milestone")
+        self.put("manual.pdf", "fixture")
+        self.assertEqual(self.states(), [])
+
+    def test_dotted_note_and_file_collision_is_ambiguous(self):
+        self.put("A.md", "[[manual.pdf]]")
+        self.put("manual.pdf", "fixture")
+        self.put("manual.pdf.md", "# Note")
+        self.assertEqual(self.states(), ["ambiguous"])
+
     def test_heading_block_alias(self):
         self.put("A.md", "[[B#Heading|display]] [[B#^a]]")
         self.put("B.md", "## Heading\nhello ^a")
