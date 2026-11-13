@@ -280,10 +280,12 @@ def _build_chart_buckets(nodes: list[dict[str, Any]], rec: dict[str, Any], max_r
                 b.skills += 1
         return buckets
 
+    dated = [node for node in nodes if _to_ts(node.get("timestamp")) is not None]
+    undated = [node for node in nodes if _to_ts(node.get("timestamp")) is None]
     chosen: Optional[list[_ChartBucket]] = None
     for granularity in ("day", "month", "year"):
         groups: dict[tuple[int, ...], _ChartBucket] = {}
-        for node in nodes:
+        for node in dated:
             ts = _to_ts(node.get("timestamp"))
             if ts is None:
                 continue
@@ -312,7 +314,7 @@ def _build_chart_buckets(nodes: list[dict[str, Any]], rec: dict[str, Any], max_r
         for i in range(n_bins):
             ts = min_ts + (i / max(1, n_bins - 1)) * (max_ts - min_ts) if min_ts and max_ts else float(i)
             chosen.append(_ChartBucket(format_date(ts), ts))
-        for node in nodes:
+        for node in dated:
             r = rec["rec"].get(str(node.get("id", "")), 0.0)
             idx = int(_clamp(math.floor(r * n_bins), 0, n_bins - 1))
             b = chosen[idx]
@@ -322,10 +324,19 @@ def _build_chart_buckets(nodes: list[dict[str, Any]], rec: dict[str, Any], max_r
             else:
                 b.skills += 1
 
+    if undated:
+        bucket = _ChartBucket("undated", 0)
+        bucket.nodes = undated
+        bucket.memories = sum(node.get("kind") == "memory" for node in undated)
+        bucket.skills = len(undated) - bucket.memories
+        chosen.append(bucket)
+
     min_ts, max_ts = rec.get("minTs"), rec.get("maxTs")
     span = (max_ts - min_ts) if min_ts is not None and max_ts is not None and max_ts > min_ts else 0
     for bucket in chosen:
-        bucket.rec = LEAD_IN + (1 - LEAD_IN) * ((bucket.ts - min_ts) / span) if span else 1.0
+        bucket.rec = LEAD_IN if bucket.label == "undated" else (
+            LEAD_IN + (1 - LEAD_IN) * ((bucket.ts - min_ts) / span) if span else 1.0
+        )
     return chosen
 
 
@@ -536,7 +547,7 @@ def render_graph(payload: dict[str, Any], *, cols: int = 80, rows: int = 16, rev
         if bucket.memories:
             row.append(["+", STYLE_DIM, 0.6])
             row.append([str(bucket.memories), STYLE_MEMORY, max(0.72, ink)])
-        if i == visible_bucket_count - 1:
+        if i == visible_bucket_count - 1 and bucket.label != "undated":
             row.append(["  ◀ now", STYLE_LABEL, 0.9])
         elif bucket.total == max_total and max_total > 1:
             row.append(["  ☄ peak", STYLE_LABEL, 0.75])
@@ -547,7 +558,8 @@ def render_graph(payload: dict[str, Any], *, cols: int = 80, rows: int = 16, rev
 
     return {
         "grid": grid,
-        "date": format_date(_date_at(rec, reveal)),
+        "date": "unknown" if visible_bucket_count and buckets[visible_bucket_count - 1].label == "undated"
+        else format_date(_date_at(rec, reveal)),
         "reveal": reveal,
         "visible": visible,
         "labels": labels,
