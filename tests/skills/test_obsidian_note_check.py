@@ -68,6 +68,25 @@ class Tests(unittest.TestCase):
         self.put("B.md", "## Heading\nhello ^a")
         self.assertEqual(self.states(), [])
 
+    def test_nested_heading_path(self):
+        self.put("A.md", "[[B#Projects#Memory Lane]]")
+        self.put("B.md", "# Projects\n## Memory Lane\n")
+        self.assertEqual(self.states(), [])
+
+    def test_nested_heading_must_be_under_the_named_parent(self):
+        self.put("A.md", "[[B#Projects#Memory Lane]]")
+        self.put("B.md", "# Projects\n## Other\n# Elsewhere\n## Memory Lane\n")
+        self.assertEqual(self.states(), ["missing_heading"])
+
+    def test_nested_heading_in_same_note_with_earlier_ancestor(self):
+        self.put("A.md", "# Document\n## Projects\n### Memory Lane\n[[#projects#memory lane]]")
+        self.assertEqual(self.states(), [])
+
+    def test_nested_heading_ignores_fenced_code(self):
+        self.put("A.md", "[[B#Projects#Memory Lane]]")
+        self.put("B.md", "# Projects\n```md\n## Memory Lane\n```\n")
+        self.assertEqual(self.states(), ["missing_heading"])
+
     def test_missing_heading(self):
         self.put("A.md", "[[B#Gone]]")
         self.put("B.md", "# B")

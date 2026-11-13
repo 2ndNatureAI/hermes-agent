@@ -94,6 +94,30 @@ def visible(text):
     return "".join(chars)
 
 
+def _heading_paths(text):
+    # Keep the heading hierarchy so [[Note#Parent#Child]] is not mistaken
+    # for one literal heading, and a child elsewhere does not resolve it.
+    stack = []
+    paths = []
+    for match in re.finditer(r"^[ \t]{0,3}(#{1,6})[ \t]+(.+)$", text, re.M):
+        level = len(match.group(1))
+        title = match.group(2).strip().rstrip("#").strip().casefold()
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+        stack.append((level, title))
+        paths.append(tuple(item[1] for item in stack))
+    return paths
+
+
+def _has_heading(note, anchor):
+    parts = tuple(part.strip().casefold() for part in anchor.split("#"))
+    if not all(parts):
+        return False
+    if len(parts) == 1:
+        return parts[0] in note["headings"]
+    return any(path[-len(parts):] == parts for path in note["heading_paths"])
+
+
 def _collect(root: Path):
     files = {}
     notes = {}
@@ -147,6 +171,7 @@ def _collect(root: Path):
                     m.group(1).strip().rstrip("#").strip().casefold()
                     for m in re.finditer(r"^\s{0,3}#{1,6}\s+(.+)$", clean, re.M)
                 ),
+                "heading_paths": _heading_paths(clean),
                 "blocks": set(re.findall(r"\^([\w-]+)\s*$", clean, re.M)),
             }
             digest.update(rel.encode() + b"\0" + hashlib.sha256(data).digest())
@@ -209,7 +234,7 @@ def _find_links(notes, files, complete):
                     status = "missing_block"
                 elif (
                     not anchor.startswith("^")
-                    and anchor.casefold() not in target_note["headings"]
+                    and not _has_heading(target_note, anchor)
                 ):
                     status = "missing_heading"
             if status != "resolved":
