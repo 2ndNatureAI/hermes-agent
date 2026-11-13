@@ -18,6 +18,22 @@ def _node(name: str, category: str, related=None):
     return n
 
 
+def test_profile_skill_shadows_bundled_copy_in_learning_graph(tmp_path, monkeypatch):
+    base = tmp_path / 'base'
+    profile = tmp_path / 'profile'
+    for root, category in ((base, 'bundled'), (profile, 'learned')):
+        skill = root / category / 'shared-skill'
+        skill.mkdir(parents=True)
+        (skill / 'SKILL.md').write_text('---\nname: shared-skill\ndescription: Example.\n---\n', encoding='utf-8')
+    monkeypatch.setattr(learning_graph, '_skill_roots', lambda: [('base', base), ('profile', profile)])
+    monkeypatch.setattr(learning_graph, '_load_usage', lambda: {'shared-skill': {'created_by': 'agent'}})
+    monkeypatch.setattr(learning_graph, '_memory_cards', lambda: [])
+    graph = learning_graph.build_learning_graph()
+    node = next(item for item in graph['nodes'] if item['id'] == 'shared-skill')
+    assert node['category'] == 'learned'
+    assert graph['stats']['nodes'] == 1
+
+
 
 
 def test_density_stats_count_isolated_nodes():

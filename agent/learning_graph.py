@@ -134,7 +134,10 @@ def build_skill_nodes(skill_roots: list[tuple[str, Path]]) -> dict[str, SkillNod
         except OSError:
             continue
         name = str(fm.get("name") or skill_md.parent.name).strip()
-        if not name or name in nodes:
+        # A profile skill shadows its bundled namesake in normal skill lookup.
+        # Preserve that precedence even when the bundled root is scanned first.
+        existing = nodes.get(name)
+        if not name or (existing is not None and not (source == 'profile' and existing.source == 'base')):
             continue
         rec = usage.get(name, {})
         last_activity = _usage_timestamp(rec)
