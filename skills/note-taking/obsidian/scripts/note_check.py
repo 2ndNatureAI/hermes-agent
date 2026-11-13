@@ -188,7 +188,9 @@ def _find_links(notes, files, complete):
             elif not dest:
                 matches = [src]
             else:
-                variants = [dest] if Path(dest).suffix else [dest + ".md", dest]
+                # A dot is legal in an extensionless note title (e.g. v1.2).
+                # Only an explicit Markdown extension rules out appending it.
+                variants = [dest] if dest.lower().endswith(".md") else [dest + ".md", dest]
                 local = [str(PurePosixPath(src).parent / v) for v in variants]
                 exact = [v for v in variants + local if v in files]
                 if exact:
