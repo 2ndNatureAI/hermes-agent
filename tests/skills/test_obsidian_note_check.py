@@ -259,3 +259,24 @@ def test_fences_in_multiline_comments_do_not_hide_visible_links(tmp_path):
     assert [(item['line'], item['target'], item['status']) for item in report['findings']] == [
         (9, 'Visible', 'missing'), (14, 'AlsoVisible', 'missing'), (19, 'AfterCode', 'missing')
     ]
+
+
+def test_growing_note_is_skipped_after_bounded_read(tmp_path, monkeypatch):
+    note = tmp_path / "Growing.md"
+    note.write_bytes(b"initial")
+    original_open = Path.open
+    grew = False
+
+    def grow_before_open(path, *args, **kwargs):
+        nonlocal grew
+        if path == note and args and args[0] == "rb" and not grew:
+            grew = True
+            with original_open(note, "ab") as stream:
+                stream.write(b"x" * checker.MAX_BYTES)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", grow_before_open)
+    report = inspect(tmp_path, complete=True)
+    assert report["note_count"] == 0
+    assert report["scope_mode"] == "partial"
+    assert report["skipped"] == [{"path": "Growing.md", "reason": "oversized"}]
