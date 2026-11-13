@@ -103,3 +103,75 @@ def test_unrecognized_pipe_line_limits_multiline_but_not_same_line_code(tmp_path
     (tmp_path / 'A.md').write_bytes(raw)
     report = checker.inspect(tmp_path, complete=True)
     assert [(f['line'], f['target']) for f in report['findings']] == [(2, 'Visible'), (5, 'AlsoVisible')]
+
+
+def test_plain_blockquote_multiline_inline_code_hides_links_within_same_paragraph(tmp_path):
+    raw = (b'> `sample\n> [[Hidden]] end` [[Visible]]\n'
+           b'> ordinary ``sample\n> [[AlsoHidden]] end`` [[AlsoVisible]]\n')
+    (tmp_path / 'A.md').write_bytes(raw)
+    report = checker.inspect(tmp_path, complete=True)
+    assert [(f['line'], f['target']) for f in report['findings']] == [(2, 'Visible'), (4, 'AlsoVisible')]
+    clean = checker.visible(raw.decode())
+    assert len(clean) == len(raw)
+    assert [i for i, c in enumerate(clean) if c == '\n'] == [i for i, c in enumerate(raw.decode()) if c == '\n']
+
+
+def test_blockquote_boundaries_preserve_links_in_separate_blocks(tmp_path):
+    raw = (b'> unmatched `\n>\n> [[NewParagraph]] `\n'
+           b'> unmatched `\n> # [[Heading]] `\n'
+           b'> unmatched `\n> - [[ListItem]] `\n'
+           b'> unmatched `\n> > [[NestedQuote]] `\n'
+           b'> unmatched `\n[[OutsideQuote]] `\n'
+           b'> unmatched `\n> line | [[PipeLine]] `\n')
+    (tmp_path / 'A.md').write_bytes(raw)
+    report = checker.inspect(tmp_path, complete=True)
+    assert [(f['line'], f['target']) for f in report['findings']] == [
+        (3, 'NewParagraph'), (5, 'Heading'), (7, 'ListItem'),
+        (9, 'NestedQuote'), (11, 'OutsideQuote'), (13, 'PipeLine')
+    ]
+
+
+def test_quoted_setext_headings_do_not_join_later_inline_code(tmp_path):
+    raw = (b'> ` [[HeadingOne]]\n> ===\n> later ` [[AfterOne]]\n'
+           b'\n> ` [[HeadingTwo]]\n> ---\n> later ` [[AfterTwo]]\n')
+    (tmp_path / 'A.md').write_bytes(raw)
+    report = checker.inspect(tmp_path, complete=True)
+    assert [(f['line'], f['target']) for f in report['findings']] == [
+        (1, 'HeadingOne'), (3, 'AfterOne'), (5, 'HeadingTwo'), (7, 'AfterTwo')
+    ]
+
+
+def test_quoted_setext_underlines_of_each_supported_length_are_boundaries(tmp_path):
+    for underline in ('-', '--', '---', '=', '==', '==='):
+        raw = f'> ` [[Heading]]\n> {underline}\n> later ` [[After]]\n'.encode()
+        (tmp_path / 'A.md').write_bytes(raw)
+        report = checker.inspect(tmp_path, complete=True)
+        assert [(f['line'], f['target']) for f in report['findings']] == [(1, 'Heading'), (3, 'After')], underline
+
+
+def test_quoted_table_cells_do_not_join_inline_code_across_pipes(tmp_path):
+    raw = (b'> | ` [[HeaderOne]] | [[HeaderTwo]] ` |\n'
+           b'> | --- | --- |\n'
+           b'> | ` [[BodyOne]] | [[BodyTwo]] ` |\n'
+           b'> | `inside [[Hidden]]` | [[Visible]] |\n')
+    (tmp_path / 'A.md').write_bytes(raw)
+    report = checker.inspect(tmp_path, complete=True)
+    assert [(f['line'], f['target']) for f in report['findings']] == [
+        (1, 'HeaderOne'), (1, 'HeaderTwo'), (3, 'BodyOne'), (3, 'BodyTwo'), (4, 'Visible')
+    ]
+
+
+def test_quoted_table_escaped_pipe_and_following_quote_paragraph(tmp_path):
+    raw = (b'> Name | Notes\n> --- | ---\n'
+           b'> `literal \\| [[Hidden]]` | [[Visible]]\n'
+           b'>\n> `ordinary\n> [[AlsoHidden]] end` [[After]]\n')
+    (tmp_path / 'A.md').write_bytes(raw)
+    report = checker.inspect(tmp_path, complete=True)
+    assert [(f['line'], f['target']) for f in report['findings']] == [(3, 'Visible'), (6, 'After')]
+
+
+def test_quoted_table_rows_without_pipes_do_not_join_code_spans(tmp_path):
+    raw = b'> A | B\n> --- | ---\n> unmatched `\n> [[Visible]] `\n'
+    (tmp_path / 'A.md').write_bytes(raw)
+    report = checker.inspect(tmp_path, complete=True)
+    assert [(f['line'], f['target']) for f in report['findings']] == [(4, 'Visible')]
