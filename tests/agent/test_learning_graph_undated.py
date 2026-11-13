@@ -71,6 +71,14 @@ def test_unix_epoch_is_a_known_date():
     assert output["frames"][-1]["date"] == "1 Jan 1970"
 
 
+def test_unix_epoch_sorts_before_later_same_day_entries():
+    nodes = [{"id": "later", "kind": "skill", "timestamp": 3600},
+             {"id": "epoch", "kind": "skill", "timestamp": 0},
+             {"id": "middle", "kind": "skill", "timestamp": 1800}]
+    output = render_frames({"nodes": nodes}, frames=2)
+    assert [node["id"] for node in output["buckets"][0]["nodes"]] == ["epoch", "middle", "later"]
+
+
 def test_short_tui_frame_and_drilldown_share_the_same_buckets():
     nodes = [{"id": str(year), "kind": "skill", "timestamp": year * 31557600} for year in range(50)]
     nodes.append({"id": "undated", "kind": "memory", "timestamp": None})
