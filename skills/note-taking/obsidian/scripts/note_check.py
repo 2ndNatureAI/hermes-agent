@@ -82,7 +82,11 @@ def visible(text):
             if fence is None:
                 fence = (token[0], len(token))
                 blank(offset, offset + len(line))
-            elif token[0] == fence[0] and len(token) >= fence[1]:
+            elif (
+                token[0] == fence[0]
+                and len(token) >= fence[1]
+                and not line[m.end():].strip()
+            ):
                 blank(offset, offset + len(line))
                 fence = None
             elif fence:
