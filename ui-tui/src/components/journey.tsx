@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import type { GatewayClient } from '../gatewayClient.js'
 import { openInEditor } from '../lib/editor.js'
+import { selectJourneyChartRows } from '../lib/journeyChartRows.js'
 import { rpcErrorMessage } from '../lib/rpc.js'
 import { deriveStarmapPalette, fadeHex, fadeInk, type StarmapPalette } from '../lib/starmapPalette.js'
 import type { Theme } from '../theme.js'
@@ -447,7 +448,7 @@ export function Journey({ gw, onClose, t }: JourneyProps) {
   // ── Timeline: static chart overview + a chronological slice/item tree ──
   const axisGap = Math.max(1, cols - 2 - data.axis.start.length - data.axis.end.length)
   const dataGrid = data.frames.at(-1)?.grid.filter(r => !rowText(r).trimStart().startsWith('trajectory')) ?? []
-  const chartGrid = dataGrid.slice(-MAX_CHART_ROWS)
+  const chartGrid = selectJourneyChartRows(dataGrid, data.buckets ?? [], MAX_CHART_ROWS)
   const listH = Math.max(3, rows - chartGrid.length - (data.categories?.length ? 11 : 10))
   const start = windowStart(cursor, tree.length, listH)
 

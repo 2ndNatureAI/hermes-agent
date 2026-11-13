@@ -326,7 +326,11 @@ def _bucket_label_node(bucket: _ChartBucket) -> Optional[dict[str, Any]]:
 def _bucket_nodes(bucket: _ChartBucket, memory_lookup: Optional[dict[str, dict[str, Any]]] = None) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     # Chronological within the slice so the TUI tree reads oldest → newest.
-    ordered = sorted(bucket.nodes, key=lambda n: _to_ts(n.get("timestamp")) or bucket.ts)
+    def timestamp_or_bucket(node: dict[str, Any]) -> float:
+        timestamp = _to_ts(node.get("timestamp"))
+        return bucket.ts if timestamp is None else timestamp
+
+    ordered = sorted(bucket.nodes, key=timestamp_or_bucket)
     for node in ordered:
         style = STYLE_MEMORY if node.get("kind") == "memory" else STYLE_SKILL
         raw_label = str(node.get("label") or node.get("id") or "unknown").strip()
