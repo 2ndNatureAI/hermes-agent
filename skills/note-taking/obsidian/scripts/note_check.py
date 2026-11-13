@@ -66,6 +66,10 @@ def _mask_code_and_comments(text, blank):
             i += 1
             continue
         divider, _ = _table_cells(line)
+        if not divider and re.fullmatch(r'[ \t]*:?-+:?[ \t]*', line):
+            # A single-column table may omit pipes in its delimiter, provided
+            # the preceding header still has an unescaped table pipe.
+            divider = [line.strip()]
         if not divider:
             i += 1
             continue

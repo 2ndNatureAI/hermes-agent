@@ -78,3 +78,18 @@ def test_table_with_no_outer_pipes_keeps_cells_separate(tmp_path):
     (tmp_path / 'A.md').write_bytes(raw)
     report = checker.inspect(tmp_path, complete=True)
     assert [(f['line'], f['target']) for f in report['findings']] == [(1, 'Header'), (3, 'First')]
+
+
+def test_single_column_aligned_table_without_outer_divider_pipes(tmp_path):
+    for divider in (':---:', ':---', '---:', '---'):
+        raw = f'| ` [[Header]] |\n{divider}\n| [[Body]] ` |\n'.encode()
+        (tmp_path / 'A.md').write_bytes(raw)
+        report = checker.inspect(tmp_path, complete=True)
+        assert [(f['line'], f['target']) for f in report['findings']] == [(1, 'Header'), (3, 'Body')]
+
+
+def test_aligned_line_without_header_pipe_remains_ordinary_paragraph(tmp_path):
+    raw = b'No table ` intro\n:---:\n[[Hidden]] end` [[Visible]]\n'
+    (tmp_path / 'A.md').write_bytes(raw)
+    report = checker.inspect(tmp_path, complete=True)
+    assert [(f['line'], f['target']) for f in report['findings']] == [(3, 'Visible')]
